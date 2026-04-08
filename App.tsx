@@ -759,60 +759,70 @@ const App: React.FC = () => {
         {/* Model Selection */}
         <div className="flex flex-col gap-2 p-3 bg-gray-50 rounded-lg border border-gray-100">
             <h2 className="text-sm font-bold text-gray-700 mb-1">AI Model</h2>
-            <div className="flex gap-1">
-                <button 
-                    onClick={() => setSelectedModel('gemini-2.5-flash-image')}
-                    className={`flex-1 px-2 py-1.5 text-xs rounded-md border transition-all ${selectedModel === 'gemini-2.5-flash-image' ? 'bg-purple-600 text-white border-purple-600' : 'bg-white text-gray-600 border-gray-300 hover:border-purple-400'}`}
-                >
-                    Banana
-                </button>
-                <button 
-                    onClick={() => setSelectedModel('gemini-3-pro-image-preview')}
-                    className={`flex-1 px-2 py-1.5 text-xs rounded-md border transition-all ${selectedModel === 'gemini-3-pro-image-preview' ? 'bg-purple-600 text-white border-purple-600' : 'bg-white text-gray-600 border-gray-300 hover:border-purple-400'}`}
-                >
-                    Banana Pro
-                </button>
-            </div>
-            
-            {selectedModel === 'gemini-3-pro-image-preview' && (
-                <div className="flex flex-col gap-3 mt-1">
-                    {/* Resolution Selector */}
-                    <div>
-                         <div className="flex justify-between items-center mb-1">
-                            <span className="text-xs font-semibold text-gray-600">Resolution</span>
-                        </div>
-                        <div className="grid grid-cols-3 gap-1">
-                            {(['1K', '2K', '4K'] as const).map(res => (
-                                <button 
-                                    key={res}
-                                    onClick={() => setImageResolution(res)}
-                                    className={`px-1 py-1 text-[10px] rounded-md border transition-all ${imageResolution === res ? 'bg-purple-600 text-white border-purple-600' : 'bg-white text-gray-600 border-gray-300 hover:border-purple-400'}`}
-                                >
-                                    {res}
-                                </button>
-                            ))}
-                        </div>
-                    </div>
-
-                    {/* API Key Section */}
-                    <div className="pt-2 border-t border-gray-200">
-                        {hasProKey ? (
-                            <div className="flex items-center gap-1.5 text-[10px] text-green-600 font-medium">
-                                <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-                                Pro Key Connected
-                                <button onClick={handleOpenKeySelector} className="ml-auto text-blue-500 hover:underline">Switch</button>
-                            </div>
-                        ) : (
-                            <button 
-                                onClick={handleOpenKeySelector}
-                                className="w-full px-3 py-1.5 text-xs bg-amber-500 text-white rounded-md hover:bg-amber-600 transition-colors flex items-center justify-center gap-1"
-                            >
-                                <span>🔑 Connect Pro Key</span>
-                            </button>
-                        )}
-                        <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noopener noreferrer" className="text-[10px] text-gray-400 mt-1 block hover:underline text-center">Billing Info</a>
+            {apiProvider === 'openai-custom' ? (
+                <div className="flex gap-1">
+                    <div className="flex-1 px-2 py-1.5 text-xs rounded-md border bg-purple-600 text-white border-purple-600 text-center truncate" title={openaiModel || 'Custom Model'}>
+                        {openaiModel || 'Custom Model'}
                     </div>
                 </div>
+            ) : (
+                <>
+                    <div className="flex gap-1">
+                        <button 
+                            onClick={() => setSelectedModel('gemini-2.5-flash-image')}
+                            className={`flex-1 px-2 py-1.5 text-xs rounded-md border transition-all ${selectedModel === 'gemini-2.5-flash-image' ? 'bg-purple-600 text-white border-purple-600' : 'bg-white text-gray-600 border-gray-300 hover:border-purple-400'}`}
+                        >
+                            Banana
+                        </button>
+                        <button 
+                            onClick={() => setSelectedModel('gemini-3-pro-image-preview')}
+                            className={`flex-1 px-2 py-1.5 text-xs rounded-md border transition-all ${selectedModel === 'gemini-3-pro-image-preview' ? 'bg-purple-600 text-white border-purple-600' : 'bg-white text-gray-600 border-gray-300 hover:border-purple-400'}`}
+                        >
+                            Banana Pro
+                        </button>
+                    </div>
+                    
+                    {selectedModel === 'gemini-3-pro-image-preview' && (
+                        <div className="flex flex-col gap-3 mt-1">
+                            {/* Resolution Selector */}
+                            <div>
+                                 <div className="flex justify-between items-center mb-1">
+                                    <span className="text-xs font-semibold text-gray-600">Resolution</span>
+                                </div>
+                                <div className="grid grid-cols-3 gap-1">
+                                    {(['1K', '2K', '4K'] as const).map(res => (
+                                        <button 
+                                            key={res}
+                                            onClick={() => setImageResolution(res)}
+                                            className={`px-1 py-1 text-[10px] rounded-md border transition-all ${imageResolution === res ? 'bg-purple-600 text-white border-purple-600' : 'bg-white text-gray-600 border-gray-300 hover:border-purple-400'}`}
+                                        >
+                                            {res}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+
+                            {/* API Key Section */}
+                            <div className="pt-2 border-t border-gray-200">
+                                {hasProKey ? (
+                                    <div className="flex items-center gap-1.5 text-[10px] text-green-600 font-medium">
+                                        <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+                                        Pro Key Connected
+                                        <button onClick={handleOpenKeySelector} className="ml-auto text-blue-500 hover:underline">Switch</button>
+                                    </div>
+                                ) : (
+                                    <button 
+                                        onClick={handleOpenKeySelector}
+                                        className="w-full px-3 py-1.5 text-xs bg-amber-500 text-white rounded-md hover:bg-amber-600 transition-colors flex items-center justify-center gap-1"
+                                    >
+                                        <span>🔑 Connect Pro Key</span>
+                                    </button>
+                                )}
+                                <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noopener noreferrer" className="text-[10px] text-gray-400 mt-1 block hover:underline text-center">Billing Info</a>
+                            </div>
+                        </div>
+                    )}
+                </>
             )}
         </div>
 
