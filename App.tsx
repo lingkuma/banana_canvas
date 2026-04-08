@@ -63,6 +63,32 @@ const App: React.FC = () => {
   const [imageResolution, setImageResolution] = useState<'1K' | '2K' | '4K'>('1K');
   const [hasProKey, setHasProKey] = useState(false);
 
+  // Custom API State
+  const [apiProvider, setApiProvider] = useState<'default' | 'gemini-custom' | 'openai-custom'>(
+    () => (localStorage.getItem('apiProvider') as any) || 'default'
+  );
+  const [customGeminiKey, setCustomGeminiKey] = useState(
+    () => localStorage.getItem('customGeminiKey') || ''
+  );
+  const [openaiBaseUrl, setOpenaiBaseUrl] = useState(
+    () => localStorage.getItem('openaiBaseUrl') || 'https://api.openai.com/v1'
+  );
+  const [openaiModel, setOpenaiModel] = useState(
+    () => localStorage.getItem('openaiModel') || 'gpt-4o'
+  );
+  const [openaiKey, setOpenaiKey] = useState(
+    () => localStorage.getItem('openaiKey') || ''
+  );
+  const [isApiConfigOpen, setIsApiConfigOpen] = useState(false);
+
+  useEffect(() => {
+    localStorage.setItem('apiProvider', apiProvider);
+    localStorage.setItem('customGeminiKey', customGeminiKey);
+    localStorage.setItem('openaiBaseUrl', openaiBaseUrl);
+    localStorage.setItem('openaiModel', openaiModel);
+    localStorage.setItem('openaiKey', openaiKey);
+  }, [apiProvider, customGeminiKey, openaiBaseUrl, openaiModel, openaiKey]);
+
   const imageInputRef = useRef<HTMLInputElement>(null);
   const canvasApiRef = useRef<CanvasApi>(null);
   const lastImagePosition = useRef<Point | null>(null);
@@ -308,13 +334,6 @@ const App: React.FC = () => {
   }, [addImagesAtPosition, getCenterOfViewport, addIFrame, addElement]);
   
  const handleGenerate = useCallback(async (selectedElements: CanvasElement[]) => {
-      const apiKey = process.env.API_KEY;
-      if (!apiKey) {
-          alert("API key not available.");
-          return;
-      }
-      const genAI = new GoogleGenAI({ apiKey });
-
       const imageElements = selectedElements.filter(el => el.type === 'image' || el.type === 'drawing') as (ImageElement | DrawingElement)[];
       const noteElements = selectedElements.filter(el => el.type === 'note') as NoteElement[];
       const activeIframeElements = elements.filter(el => el.type === 'iframe' && el.isActivated) as IFrameElement[];
@@ -326,14 +345,6 @@ const App: React.FC = () => {
 
       setIsGenerating(true);
 
-      const commonConfig = {
-          responseModalities: [Modality.IMAGE, Modality.TEXT],
-          imageConfig: {
-              aspectRatio: aspectRatio,
-              ...(selectedModel === 'gemini-3-pro-image-preview' ? { imageSize: imageResolution } : {})
-          }
-      };
-      
       try {
         let instructions = noteElements.map(note => note.content).join(' \n');
 
@@ -344,59 +355,138 @@ const App: React.FC = () => {
             instructions += `\n\n[Web Page Context]\n${iframeContext}\n(Note: You cannot access the web page directly, but use the URL and user's intent to inform the generation.)`;
         }
 
-
-        if (imageElements.length > 0) { // Editing/Reimagining with existing images
-            const imageParts = imageElements.filter(el => el.src).map(el => {
-                const [header, data] = el.src.split(',');
-                const mimeType = header.match(/data:(.*);base64/)?.[1] || 'image/png';
-                return { inlineData: { data, mimeType } };
-            });
-
-            const promptText = `Using the provided image(s) as a base, follow these instructions: "${instructions}". If no specific instructions are given, creatively reimagine and enhance the image(s).`;
-            const parts = [...imageParts, { text: promptText }];
-            
-            const generateSingleImage = async () => {
-              const response = await genAI.models.generateContent({
-                  model: selectedModel,
-                  contents: { parts },
-                  config: commonConfig,
-              });
-              for (const part of response.candidates[0].content.parts) {
-                  if (part.inlineData) {
-                      return `data:image/png;base64,${part.inlineData.data}`;
-                  }
-              }
-              return null;
-            };
-
-            const [image1, image2] = await Promise.all([generateSingleImage(), generateSingleImage()]);
-            const validImages = [image1, image2].filter((img): img is string => img !== null);
-            if (validImages.length > 0) {
-                setGenerationHistory(prev => [...validImages, ...prev]);
+        if (apiProvider === 'openai-custom') {
+            if (!openaiKey) {
+                alert("OpenAI API key not available.");
+                setIsGenerating(false);
+                return;
             }
 
-        } else { // Generating new image from text description
-            const promptText = `Generate a completely new image based on this description: "${instructions}"`;
-
-            // For pure text-to-image, use generateContent with the banana model
-            const generateSingleImage = async () => {
-                const response = await genAI.models.generateContent({
-                    model: selectedModel,
-                    contents: { parts: [{ text: promptText }] },
-                    config: commonConfig,
+            const messages: any[] = [];
+            if (imageElements.length > 0) {
+                const content: any[] = [
+                    { type: "text", text: `Using the provided image(s) as a base, follow these instructions: "${instructions}". If no specific instructions are given, creatively reimagine and enhance the image(s).` }
+                ];
+                imageElements.filter(el => el.src).forEach(el => {
+                    content.push({
+                        type: "image_url",
+                        image_url: { url: el.src }
+                    });
                 });
-                for (const part of response.candidates[0].content.parts) {
-                    if (part.inlineData) {
-                        return `data:image/png;base64,${part.inlineData.data}`;
-                    }
+                messages.push({ role: "user", content });
+            } else {
+                messages.push({ role: "user", content: `Generate a completely new image based on this description: "${instructions}"` });
+            }
+
+            const generateSingleImageOpenAI = async () => {
+                const response = await fetch(`${openaiBaseUrl.replace(/\/$/, '')}/chat/completions`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${openaiKey}`
+                    },
+                    body: JSON.stringify({
+                        model: openaiModel,
+                        messages: messages,
+                    })
+                });
+                if (!response.ok) {
+                    throw new Error(`OpenAI API error: ${response.statusText}`);
                 }
+                const data = await response.json();
+                const contentStr = data.choices[0].message.content;
+                
+                // Try to extract markdown image URL
+                const match = contentStr.match(/!\[.*?\]\((.*?)\)/);
+                if (match) {
+                    return match[1];
+                }
+                // Or if it's a raw URL
+                if (contentStr.startsWith('http') || contentStr.startsWith('data:image')) {
+                    return contentStr;
+                }
+                // Fallback, just return the content if it looks like a URL, otherwise null
                 return null;
             };
 
-            const [image1, image2] = await Promise.all([generateSingleImage(), generateSingleImage()]);
+            const [image1, image2] = await Promise.all([generateSingleImageOpenAI(), generateSingleImageOpenAI()]);
             const validImages = [image1, image2].filter((img): img is string => img !== null);
             if (validImages.length > 0) {
                 setGenerationHistory(prev => [...validImages, ...prev]);
+            } else {
+                alert("Failed to parse image URL from OpenAI response.");
+            }
+
+        } else {
+            // Default or Custom Gemini
+            const apiKey = apiProvider === 'gemini-custom' ? customGeminiKey : process.env.API_KEY;
+            if (!apiKey) {
+                alert("Gemini API key not available.");
+                setIsGenerating(false);
+                return;
+            }
+            const genAI = new GoogleGenAI({ apiKey });
+
+            const commonConfig = {
+                responseModalities: [Modality.IMAGE, Modality.TEXT],
+                imageConfig: {
+                    aspectRatio: aspectRatio,
+                    ...(selectedModel === 'gemini-3-pro-image-preview' ? { imageSize: imageResolution } : {})
+                }
+            };
+
+            if (imageElements.length > 0) { // Editing/Reimagining with existing images
+                const imageParts = imageElements.filter(el => el.src).map(el => {
+                    const [header, data] = el.src.split(',');
+                    const mimeType = header.match(/data:(.*);base64/)?.[1] || 'image/png';
+                    return { inlineData: { data, mimeType } };
+                });
+
+                const promptText = `Using the provided image(s) as a base, follow these instructions: "${instructions}". If no specific instructions are given, creatively reimagine and enhance the image(s).`;
+                const parts = [...imageParts, { text: promptText }];
+                
+                const generateSingleImage = async () => {
+                  const response = await genAI.models.generateContent({
+                      model: selectedModel,
+                      contents: { parts },
+                      config: commonConfig,
+                  });
+                  for (const part of response.candidates[0].content.parts) {
+                      if (part.inlineData) {
+                          return `data:image/png;base64,${part.inlineData.data}`;
+                      }
+                  }
+                  return null;
+                };
+
+                const [image1, image2] = await Promise.all([generateSingleImage(), generateSingleImage()]);
+                const validImages = [image1, image2].filter((img): img is string => img !== null);
+                if (validImages.length > 0) {
+                    setGenerationHistory(prev => [...validImages, ...prev]);
+                }
+
+            } else { // Generating new image from text description
+                const promptText = `Generate a completely new image based on this description: "${instructions}"`;
+
+                const generateSingleImage = async () => {
+                    const response = await genAI.models.generateContent({
+                        model: selectedModel,
+                        contents: { parts: [{ text: promptText }] },
+                        config: commonConfig,
+                    });
+                    for (const part of response.candidates[0].content.parts) {
+                        if (part.inlineData) {
+                            return `data:image/png;base64,${part.inlineData.data}`;
+                        }
+                    }
+                    return null;
+                };
+
+                const [image1, image2] = await Promise.all([generateSingleImage(), generateSingleImage()]);
+                const validImages = [image1, image2].filter((img): img is string => img !== null);
+                if (validImages.length > 0) {
+                    setGenerationHistory(prev => [...validImages, ...prev]);
+                }
             }
         }
       } catch (error: any) {
@@ -410,7 +500,7 @@ const App: React.FC = () => {
       } finally {
         setIsGenerating(false);
       }
-  }, [elements, selectedModel, aspectRatio, imageResolution]);
+  }, [elements, selectedModel, aspectRatio, imageResolution, apiProvider, customGeminiKey, openaiBaseUrl, openaiModel, openaiKey]);
 
 
   const handleSelectElement = useCallback((id: string | null, shiftKey: boolean) => {
@@ -657,6 +747,13 @@ const App: React.FC = () => {
         <div>
           <h1 className="text-xl font-bold text-gray-800">Infinite Canvas</h1>
           <p className="text-sm text-gray-600 mt-1">Ver 3.0 • Creative Space</p>
+          <button 
+            onClick={() => setIsApiConfigOpen(true)}
+            className="mt-2 w-full px-2 py-1.5 text-xs bg-gray-100 text-gray-700 rounded border border-gray-200 hover:bg-gray-200 transition-colors flex items-center justify-center gap-1"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+            API Configuration
+          </button>
         </div>
 
         {/* Model Selection */}
@@ -858,6 +955,86 @@ const App: React.FC = () => {
             onRestore={handleRestoreElements}
             onDelete={handlePermanentlyDeleteElements}
         />
+      )}
+
+      {isApiConfigOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+          <div className="bg-white rounded-xl shadow-2xl p-6 w-[400px] max-w-[90vw]">
+            <h2 className="text-xl font-bold text-gray-800 mb-4">API Configuration</h2>
+            
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">API Provider</label>
+                <select 
+                  value={apiProvider}
+                  onChange={(e) => setApiProvider(e.target.value as any)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                >
+                  <option value="default">Built-in API (Default)</option>
+                  <option value="gemini-custom">Custom Gemini API</option>
+                  <option value="openai-custom">Custom OpenAI API</option>
+                </select>
+              </div>
+
+              {apiProvider === 'gemini-custom' && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Gemini API Key</label>
+                  <input 
+                    type="password"
+                    value={customGeminiKey}
+                    onChange={(e) => setCustomGeminiKey(e.target.value)}
+                    placeholder="AIzaSy..."
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                  />
+                </div>
+              )}
+
+              {apiProvider === 'openai-custom' && (
+                <>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Base URL</label>
+                    <input 
+                      type="text"
+                      value={openaiBaseUrl}
+                      onChange={(e) => setOpenaiBaseUrl(e.target.value)}
+                      placeholder="https://api.openai.com/v1"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Model Name</label>
+                    <input 
+                      type="text"
+                      value={openaiModel}
+                      onChange={(e) => setOpenaiModel(e.target.value)}
+                      placeholder="gpt-4o"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">API Key</label>
+                    <input 
+                      type="password"
+                      value={openaiKey}
+                      onChange={(e) => setOpenaiKey(e.target.value)}
+                      placeholder="sk-..."
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    />
+                  </div>
+                </>
+              )}
+            </div>
+
+            <div className="mt-6 flex justify-end">
+              <button 
+                onClick={() => setIsApiConfigOpen(false)}
+                className="px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700 transition-colors"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
     </main>
