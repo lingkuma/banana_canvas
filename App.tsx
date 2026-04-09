@@ -1036,6 +1036,7 @@ const App: React.FC = () => {
                     value={customGeminiKey}
                     onChange={(e) => setCustomGeminiKey(e.target.value)}
                     placeholder="AIzaSy..."
+                    autoComplete="new-password"
                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
                   />
                 </div>
@@ -1050,6 +1051,9 @@ const App: React.FC = () => {
                       value={openaiBaseUrl}
                       onChange={(e) => setOpenaiBaseUrl(e.target.value)}
                       placeholder="https://api.openai.com/v1"
+                      autoComplete="off"
+                      data-lpignore="true"
+                      data-1p-ignore="true"
                       className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
                     />
                   </div>
@@ -1064,6 +1068,9 @@ const App: React.FC = () => {
                             onBlur={handleModelBlur}
                             placeholder="e.g. gpt-4o"
                             autoComplete="off"
+                            data-lpignore="true"
+                            data-1p-ignore="true"
+                            spellCheck="false"
                             className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
                         />
                         <button 
@@ -1110,6 +1117,7 @@ const App: React.FC = () => {
                       value={openaiKey}
                       onChange={(e) => setOpenaiKey(e.target.value)}
                       placeholder="sk-..."
+                      autoComplete="new-password"
                       className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
                     />
                   </div>
