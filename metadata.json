@@ -1,5 +1,5 @@
 {
   "name": "小熊香蕉画布v3",
-  "description": "Ver 3.0\n- Add Model Selection (Banana / Banana Pro)\n- Banana Pro requires personal API Key selection\n- Improve text-to-image workflow\n- Support undo/redo across the board\n\nAn interactive, infinite canvas application built with Nano Banana. Users can pan and zoom the canvas and place elements on it. The canvas provides a boundless space for creativity and organization.\n\n",
+  "description": "Ver 3.0\n- Add Model Selection (Banana / Banana Pro)\n- Banana Pro requires personal API Key selection\n- Improve text-to-image workflow\n- Support undo/redo across the board\n\nAn interactive, Banana Canvas application built with Nano Banana. Users can pan and zoom the canvas and place elements on it. The canvas provides a boundless space for creativity and organization.\n\n",
   "requestFramePermissions": []
 }

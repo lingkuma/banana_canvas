@@ -781,7 +781,7 @@ const App: React.FC = () => {
     <main className="relative w-screen h-screen bg-gray-100 font-sans" onClick={() => setContextMenu(null)}>
       <div className="absolute top-4 left-4 z-20 p-4 bg-white/80 backdrop-blur-sm rounded-lg shadow-lg border border-gray-200 w-64 flex flex-col gap-4 max-h-[90vh] overflow-y-auto">
         <div>
-          <h1 className="text-xl font-bold text-gray-800">Infinite Canvas</h1>
+          <h1 className="text-xl font-bold text-gray-800">Banana Canvas</h1>
           <p className="text-sm text-gray-600 mt-1">Ver 3.0 • Creative Space</p>
           <button 
             onClick={() => setIsApiConfigOpen(true)}
@@ -1063,6 +1063,7 @@ const App: React.FC = () => {
                             onFocus={() => setIsModelDropdownOpen(true)}
                             onBlur={handleModelBlur}
                             placeholder="e.g. gpt-4o"
+                            autoComplete="off"
                             className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
                         />
                         <button 
