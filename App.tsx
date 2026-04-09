@@ -430,18 +430,45 @@ const App: React.FC = () => {
                     throw new Error(`OpenAI API error: ${response.statusText}`);
                 }
                 const data = await response.json();
-                const contentStr = data.choices[0].message.content;
                 
-                // Try to extract markdown image URL
-                const match = contentStr.match(/!\[.*?\]\((.*?)\)/);
-                if (match) {
-                    return match[1];
+                const formatBase64 = (b64: string) => b64.startsWith('data:') ? b64 : `data:image/jpeg;base64,${b64}`;
+
+                // 1. Check data.data[0].b64_json
+                if (data.data?.[0]?.b64_json) {
+                    return formatBase64(data.data[0].b64_json);
                 }
-                // Or if it's a raw URL
-                if (contentStr.startsWith('http') || contentStr.startsWith('data:image')) {
-                    return contentStr;
+                
+                // 2. Check data.data[0].url
+                if (data.data?.[0]?.url) {
+                    return data.data[0].url;
                 }
-                // Fallback, just return the content if it looks like a URL, otherwise null
+
+                if (data.choices?.[0]?.message) {
+                    const message = data.choices[0].message;
+
+                    // 3. Check choices[0].message.image.data
+                    if (message.image?.data) {
+                        return formatBase64(message.image.data);
+                    }
+
+                    // 4. Check choices[0].message.content.image.data (if content is an object)
+                    if (message.content?.image?.data) {
+                        return formatBase64(message.content.image.data);
+                    }
+
+                    // 5. Check choices[0].message.content as string (markdown or raw URL)
+                    if (typeof message.content === 'string') {
+                        const match = message.content.match(/!\[.*?\]\((.*?)\)/);
+                        if (match) {
+                            return match[1];
+                        }
+                        if (message.content.startsWith('http') || message.content.startsWith('data:image')) {
+                            return message.content;
+                        }
+                    }
+                }
+                
+                // Fallback
                 return null;
             };
 
