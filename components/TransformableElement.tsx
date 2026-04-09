@@ -210,17 +210,41 @@ export const TransformableElement: React.FC<TransformableElementProps> = ({ elem
         };
     }, [interaction, handleInteractionMove, handleInteractionEnd]);
     
-    const handleCopyContent = useCallback((e: React.MouseEvent) => {
+    const [isCopying, setIsCopying] = useState(false);
+
+    const handleCopyContent = useCallback(async (e: React.MouseEvent) => {
         if (element.type !== 'iframe') return;
         e.stopPropagation();
-        const contentToCopy = `[Web Page Content for AI]\nSource Mode: ${element.sourceMode}\nURL: ${element.url}`;
-        navigator.clipboard.writeText(contentToCopy).then(() => {
+        
+        setIsCopying(true);
+        try {
+            const response = await fetch(`https://api.allorigins.win/get?url=${encodeURIComponent(element.url)}`);
+            if (!response.ok) throw new Error('Network response was not ok');
+            const data = await response.json();
+            
+            const htmlContent = data.contents;
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(htmlContent, 'text/html');
+            doc.querySelectorAll('script, style').forEach(s => s.remove());
+            const textContent = doc.body ? doc.body.innerText.trim() : htmlContent;
+            
+            const contentToCopy = `[Web Page Content for AI]\nSource Mode: ${element.sourceMode}\nURL: ${element.url}\n\n[Content]\n${textContent.substring(0, 15000)}`;
+            
+            await navigator.clipboard.writeText(contentToCopy);
+            
             setCopied(true);
             setTimeout(() => setCopied(false), 2000);
-        }).catch(err => {
-            console.error('Failed to copy content: ', err);
-            alert('Failed to copy content.');
-        });
+        } catch (err) {
+            console.error('Failed to fetch or copy content: ', err);
+            const fallbackContent = `[Web Page Content for AI]\nSource Mode: ${element.sourceMode}\nURL: ${element.url}\n\n(Failed to fetch HTML content)`;
+            navigator.clipboard.writeText(fallbackContent).then(() => {
+                setCopied(true);
+                setTimeout(() => setCopied(false), 2000);
+            });
+            alert('Failed to fetch full page content. Copied URL instead.');
+        } finally {
+            setIsCopying(false);
+        }
     }, [element]);
 
     return (
@@ -318,8 +342,14 @@ export const TransformableElement: React.FC<TransformableElementProps> = ({ elem
                                         title="Copy AI Context"
                                         onClick={handleCopyContent}
                                         className="p-1 rounded hover:bg-gray-600"
+                                        disabled={isCopying}
                                     >
-                                        {copied ? (
+                                        {isCopying ? (
+                                            <svg className="animate-spin h-3 w-3 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                            </svg>
+                                        ) : copied ? (
                                             <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="currentColor" className="text-green-400" viewBox="0 0 16 16"><path d="M12.736 3.97a.733.733 0 0 1 1.047 0c.286.289.29.756.01 1.05L7.88 12.01a.733.733 0 0 1-1.065.02L3.217 8.384a.757.757 0 0 1 0-1.06.733.733 0 0 1 1.047 0l3.052 3.093 5.4-6.425z"/></svg>
                                         ) : (
                                             <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="currentColor" viewBox="0 0 16 16"><path d="M4 1.5H3a2 2 0 0 0-2 2V14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V3.5a2 2 0 0 0-2-2h-1v1h1a1 1 0 0 1 1 1V14a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V3.5a1 1 0 0 1 1-1h1z"/><path d="M9.5 1a.5.5 0 0 1 .5.5v1a.5.5 0 0 1-.5.5h-3a.5.5 0 0 1-.5-.5v-1a.5.5 0 0 1 .5-.5zM9 1.5H7v1h2z"/></svg>

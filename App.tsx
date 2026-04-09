@@ -79,7 +79,12 @@ const App: React.FC = () => {
   const [openaiKey, setOpenaiKey] = useState(
     () => localStorage.getItem('openaiKey') || ''
   );
+  const [openaiModelsList, setOpenaiModelsList] = useState<string[]>(() => {
+    const saved = localStorage.getItem('openaiModelsList');
+    return saved ? JSON.parse(saved) : ['gpt-4o', 'gpt-4-turbo', 'dall-e-3'];
+  });
   const [isApiConfigOpen, setIsApiConfigOpen] = useState(false);
+  const [isModelDropdownOpen, setIsModelDropdownOpen] = useState(false);
 
   useEffect(() => {
     localStorage.setItem('apiProvider', apiProvider);
@@ -87,7 +92,38 @@ const App: React.FC = () => {
     localStorage.setItem('openaiBaseUrl', openaiBaseUrl);
     localStorage.setItem('openaiModel', openaiModel);
     localStorage.setItem('openaiKey', openaiKey);
-  }, [apiProvider, customGeminiKey, openaiBaseUrl, openaiModel, openaiKey]);
+    localStorage.setItem('openaiModelsList', JSON.stringify(openaiModelsList));
+  }, [apiProvider, customGeminiKey, openaiBaseUrl, openaiModel, openaiKey, openaiModelsList]);
+
+  const handleCloseApiConfig = () => {
+    if (apiProvider === 'openai-custom' && openaiModel && !openaiModelsList.includes(openaiModel)) {
+      setOpenaiModelsList(prev => [...prev, openaiModel]);
+    }
+    setIsApiConfigOpen(false);
+  };
+
+  const handleDeleteModel = (e: React.MouseEvent, modelToDelete: string) => {
+    e.stopPropagation();
+    e.preventDefault();
+    setOpenaiModelsList(prev => prev.filter(m => m !== modelToDelete));
+    if (openaiModel === modelToDelete) {
+        setOpenaiModel('');
+    }
+  };
+
+  const handleModelSelect = (model: string) => {
+    setOpenaiModel(model);
+    setIsModelDropdownOpen(false);
+  };
+
+  const handleModelBlur = () => {
+    setTimeout(() => {
+        setIsModelDropdownOpen(false);
+        if (openaiModel && !openaiModelsList.includes(openaiModel)) {
+            setOpenaiModelsList(prev => [...prev, openaiModel]);
+        }
+    }, 200);
+  };
 
   const imageInputRef = useRef<HTMLInputElement>(null);
   const canvasApiRef = useRef<CanvasApi>(null);
@@ -760,10 +796,16 @@ const App: React.FC = () => {
         <div className="flex flex-col gap-2 p-3 bg-gray-50 rounded-lg border border-gray-100">
             <h2 className="text-sm font-bold text-gray-700 mb-1">AI Model</h2>
             {apiProvider === 'openai-custom' ? (
-                <div className="flex gap-1">
-                    <div className="flex-1 px-2 py-1.5 text-xs rounded-md border bg-purple-600 text-white border-purple-600 text-center truncate" title={openaiModel || 'Custom Model'}>
-                        {openaiModel || 'Custom Model'}
-                    </div>
+                <div className="flex flex-col gap-1">
+                    <select 
+                        value={openaiModel}
+                        onChange={(e) => setOpenaiModel(e.target.value)}
+                        className="w-full px-2 py-1.5 text-xs rounded-md border bg-white text-gray-700 border-gray-300 focus:outline-none focus:ring-1 focus:ring-purple-500"
+                    >
+                        {openaiModelsList.map(model => (
+                            <option key={model} value={model}>{model}</option>
+                        ))}
+                    </select>
                 </div>
             ) : (
                 <>
@@ -1011,15 +1053,54 @@ const App: React.FC = () => {
                       className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
                     />
                   </div>
-                  <div>
+                  <div className="relative">
                     <label className="block text-sm font-medium text-gray-700 mb-1">Model Name</label>
-                    <input 
-                      type="text"
-                      value={openaiModel}
-                      onChange={(e) => setOpenaiModel(e.target.value)}
-                      placeholder="gpt-4o"
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
-                    />
+                    <div className="relative">
+                        <input 
+                            type="text"
+                            value={openaiModel}
+                            onChange={(e) => setOpenaiModel(e.target.value)}
+                            onFocus={() => setIsModelDropdownOpen(true)}
+                            onBlur={handleModelBlur}
+                            placeholder="e.g. gpt-4o"
+                            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                        />
+                        <button 
+                            type="button"
+                            onClick={() => setIsModelDropdownOpen(!isModelDropdownOpen)}
+                            className="absolute inset-y-0 right-0 px-3 flex items-center text-gray-500 hover:text-gray-700"
+                        >
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
+                                <path fillRule="evenodd" d="M1.646 4.646a.5.5 0 0 1 .708 0L8 10.293l5.646-5.647a.5.5 0 0 1 .708.708l-6 6a.5.5 0 0 1-.708 0l-6-6a.5.5 0 0 1 0-.708z"/>
+                            </svg>
+                        </button>
+                    </div>
+                    {isModelDropdownOpen && openaiModelsList.length > 0 && (
+                        <div className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded-md shadow-lg max-h-48 overflow-y-auto">
+                            {openaiModelsList.map(model => (
+                                <div 
+                                    key={model} 
+                                    className="flex justify-between items-center px-3 py-2 hover:bg-gray-100 cursor-pointer"
+                                    onMouseDown={(e) => {
+                                        e.preventDefault();
+                                        handleModelSelect(model);
+                                    }}
+                                >
+                                    <span className="text-sm text-gray-800">{model}</span>
+                                    <button
+                                        type="button"
+                                        onMouseDown={(e) => handleDeleteModel(e, model)}
+                                        className="text-gray-400 hover:text-red-500 p-1 rounded-full hover:bg-gray-200 transition-colors"
+                                        title="Delete saved model"
+                                    >
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16">
+                                            <path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 0 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708z"/>
+                                        </svg>
+                                    </button>
+                                </div>
+                            ))}
+                        </div>
+                    )}
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">API Key</label>
@@ -1037,7 +1118,7 @@ const App: React.FC = () => {
 
             <div className="mt-6 flex justify-end">
               <button 
-                onClick={() => setIsApiConfigOpen(false)}
+                onClick={handleCloseApiConfig}
                 className="px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700 transition-colors"
               >
                 Done
