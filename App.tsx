@@ -61,6 +61,7 @@ const App: React.FC = () => {
   const [selectedModel, setSelectedModel] = useState<'gemini-2.5-flash-image' | 'gemini-3-pro-image-preview' | 'gemini-2.0-flash'>('gemini-2.5-flash-image');
   const [aspectRatio, setAspectRatio] = useState<'1:1' | '3:4' | '4:3' | '9:16' | '16:9'>('1:1');
   const [imageResolution, setImageResolution] = useState<'1K' | '2K' | '4K'>('1K');
+  const [imageCount, setImageCount] = useState<number>(2);
   const [hasProKey, setHasProKey] = useState(false);
 
   // Custom API State
@@ -429,6 +430,7 @@ const App: React.FC = () => {
                         model: openaiModel,
                         messages: messages,
                         size: openaiSize,
+                        n: 1, // Explicitly request 1 image per call to handle custom endpoints better
                     })
                 });
                 if (!response.ok) {
@@ -477,8 +479,9 @@ const App: React.FC = () => {
                 return null;
             };
 
-            const [image1, image2] = await Promise.all([generateSingleImageOpenAI(), generateSingleImageOpenAI()]);
-            const validImages = [image1, image2].filter((img): img is string => img !== null);
+            const promises = Array.from({ length: imageCount }, () => generateSingleImageOpenAI());
+            const images = await Promise.all(promises);
+            const validImages = images.filter((img): img is string => img !== null);
             if (validImages.length > 0) {
                 setGenerationHistory(prev => [...validImages, ...prev]);
             } else {
@@ -527,8 +530,9 @@ const App: React.FC = () => {
                   return null;
                 };
 
-                const [image1, image2] = await Promise.all([generateSingleImage(), generateSingleImage()]);
-                const validImages = [image1, image2].filter((img): img is string => img !== null);
+                const promises = Array.from({ length: imageCount }, () => generateSingleImage());
+                const images = await Promise.all(promises);
+                const validImages = images.filter((img): img is string => img !== null);
                 if (validImages.length > 0) {
                     setGenerationHistory(prev => [...validImages, ...prev]);
                 }
@@ -550,8 +554,9 @@ const App: React.FC = () => {
                     return null;
                 };
 
-                const [image1, image2] = await Promise.all([generateSingleImage(), generateSingleImage()]);
-                const validImages = [image1, image2].filter((img): img is string => img !== null);
+                const promises = Array.from({ length: imageCount }, () => generateSingleImage());
+                const images = await Promise.all(promises);
+                const validImages = images.filter((img): img is string => img !== null);
                 if (validImages.length > 0) {
                     setGenerationHistory(prev => [...validImages, ...prev]);
                 }
@@ -568,7 +573,7 @@ const App: React.FC = () => {
       } finally {
         setIsGenerating(false);
       }
-  }, [elements, selectedModel, aspectRatio, imageResolution, apiProvider, customGeminiKey, openaiBaseUrl, openaiModel, openaiKey]);
+  }, [elements, selectedModel, aspectRatio, imageResolution, imageCount, apiProvider, customGeminiKey, openaiBaseUrl, openaiModel, openaiKey]);
 
 
   const handleSelectElement = useCallback((id: string | null, shiftKey: boolean) => {
@@ -919,6 +924,22 @@ const App: React.FC = () => {
                         {ratio}
                     </button>
                 ))}
+            </div>
+
+            {/* Image Count Selection */}
+            <div className="mt-2">
+                <h2 className="text-sm font-bold text-gray-700 mb-1">Number of Images</h2>
+                <div className="grid grid-cols-4 gap-1">
+                    {[1, 2, 3, 4].map(count => (
+                        <button 
+                            key={count}
+                            onClick={() => setImageCount(count)}
+                            className={`px-2 py-1.5 text-xs rounded-md border transition-all ${imageCount === count ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-300 hover:border-blue-400'}`}
+                        >
+                            {count}
+                        </button>
+                    ))}
+                </div>
             </div>
         </div>
 
