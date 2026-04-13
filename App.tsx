@@ -58,7 +58,7 @@ const App: React.FC = () => {
   const [isTrashModalOpen, setIsTrashModalOpen] = useState(false);
   
   // Model and API Key State
-  const [selectedModel, setSelectedModel] = useState<'gemini-2.5-flash-image' | 'gemini-3-pro-image-preview'>('gemini-2.5-flash-image');
+  const [selectedModel, setSelectedModel] = useState<'gemini-2.5-flash-image' | 'gemini-3-pro-image-preview' | 'gemini-2.0-flash'>('gemini-2.5-flash-image');
   const [aspectRatio, setAspectRatio] = useState<'1:1' | '3:4' | '4:3' | '9:16' | '16:9'>('1:1');
   const [imageResolution, setImageResolution] = useState<'1K' | '2K' | '4K'>('1K');
   const [hasProKey, setHasProKey] = useState(false);
@@ -414,6 +414,10 @@ const App: React.FC = () => {
                 messages.push({ role: "user", content: `Generate a completely new image based on this description: "${instructions}"` });
             }
 
+            let openaiSize = "1024x1024";
+            if (imageResolution === '2K') openaiSize = "2048x2048";
+            if (imageResolution === '4K') openaiSize = "4096x4096";
+
             const generateSingleImageOpenAI = async () => {
                 const response = await fetch(`${openaiBaseUrl.replace(/\/$/, '')}/chat/completions`, {
                     method: 'POST',
@@ -424,6 +428,7 @@ const App: React.FC = () => {
                     body: JSON.stringify({
                         model: openaiModel,
                         messages: messages,
+                        size: openaiSize,
                     })
                 });
                 if (!response.ok) {
@@ -494,7 +499,7 @@ const App: React.FC = () => {
                 responseModalities: [Modality.IMAGE, Modality.TEXT],
                 imageConfig: {
                     aspectRatio: aspectRatio,
-                    ...(selectedModel === 'gemini-3-pro-image-preview' ? { imageSize: imageResolution } : {})
+                    imageSize: imageResolution
                 }
             };
 
@@ -838,14 +843,20 @@ const App: React.FC = () => {
                 <>
                     <div className="flex gap-1">
                         <button 
+                            onClick={() => setSelectedModel('gemini-2.0-flash')}
+                            className={`flex-1 px-1 py-1.5 text-[10px] rounded-md border transition-all ${selectedModel === 'gemini-2.0-flash' ? 'bg-purple-600 text-white border-purple-600' : 'bg-white text-gray-600 border-gray-300 hover:border-purple-400'}`}
+                        >
+                            Banana 2
+                        </button>
+                        <button 
                             onClick={() => setSelectedModel('gemini-2.5-flash-image')}
-                            className={`flex-1 px-2 py-1.5 text-xs rounded-md border transition-all ${selectedModel === 'gemini-2.5-flash-image' ? 'bg-purple-600 text-white border-purple-600' : 'bg-white text-gray-600 border-gray-300 hover:border-purple-400'}`}
+                            className={`flex-1 px-1 py-1.5 text-[10px] rounded-md border transition-all ${selectedModel === 'gemini-2.5-flash-image' ? 'bg-purple-600 text-white border-purple-600' : 'bg-white text-gray-600 border-gray-300 hover:border-purple-400'}`}
                         >
                             Banana
                         </button>
                         <button 
                             onClick={() => setSelectedModel('gemini-3-pro-image-preview')}
-                            className={`flex-1 px-2 py-1.5 text-xs rounded-md border transition-all ${selectedModel === 'gemini-3-pro-image-preview' ? 'bg-purple-600 text-white border-purple-600' : 'bg-white text-gray-600 border-gray-300 hover:border-purple-400'}`}
+                            className={`flex-1 px-1 py-1.5 text-[10px] rounded-md border transition-all ${selectedModel === 'gemini-3-pro-image-preview' ? 'bg-purple-600 text-white border-purple-600' : 'bg-white text-gray-600 border-gray-300 hover:border-purple-400'}`}
                         >
                             Banana Pro
                         </button>
@@ -853,24 +864,6 @@ const App: React.FC = () => {
                     
                     {selectedModel === 'gemini-3-pro-image-preview' && (
                         <div className="flex flex-col gap-3 mt-1">
-                            {/* Resolution Selector */}
-                            <div>
-                                 <div className="flex justify-between items-center mb-1">
-                                    <span className="text-xs font-semibold text-gray-600">Resolution</span>
-                                </div>
-                                <div className="grid grid-cols-3 gap-1">
-                                    {(['1K', '2K', '4K'] as const).map(res => (
-                                        <button 
-                                            key={res}
-                                            onClick={() => setImageResolution(res)}
-                                            className={`px-1 py-1 text-[10px] rounded-md border transition-all ${imageResolution === res ? 'bg-purple-600 text-white border-purple-600' : 'bg-white text-gray-600 border-gray-300 hover:border-purple-400'}`}
-                                        >
-                                            {res}
-                                        </button>
-                                    ))}
-                                </div>
-                            </div>
-
                             {/* API Key Section */}
                             <div className="pt-2 border-t border-gray-200">
                                 {hasProKey ? (
@@ -893,6 +886,24 @@ const App: React.FC = () => {
                     )}
                 </>
             )}
+
+            {/* Resolution Selector - Now available for all models */}
+            <div className="mt-2">
+                 <div className="flex justify-between items-center mb-1">
+                    <span className="text-xs font-semibold text-gray-600">Resolution</span>
+                </div>
+                <div className="grid grid-cols-3 gap-1">
+                    {(['1K', '2K', '4K'] as const).map(res => (
+                        <button 
+                            key={res}
+                            onClick={() => setImageResolution(res)}
+                            className={`px-1 py-1 text-[10px] rounded-md border transition-all ${imageResolution === res ? 'bg-purple-600 text-white border-purple-600' : 'bg-white text-gray-600 border-gray-300 hover:border-purple-400'}`}
+                        >
+                            {res}
+                        </button>
+                    ))}
+                </div>
+            </div>
         </div>
 
         {/* Aspect Ratio Selection */}
