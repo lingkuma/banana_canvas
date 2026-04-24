@@ -80,6 +80,9 @@ const App: React.FC = () => {
   const [openaiKey, setOpenaiKey] = useState(
     () => localStorage.getItem('openaiKey') || ''
   );
+  const [openaiStream, setOpenaiStream] = useState(
+    () => localStorage.getItem('openaiStream') === 'true'
+  );
   const [openaiModelsList, setOpenaiModelsList] = useState<string[]>(() => {
     const saved = localStorage.getItem('openaiModelsList');
     return saved ? JSON.parse(saved) : ['gpt-4o', 'gpt-4-turbo', 'dall-e-3'];
@@ -93,8 +96,9 @@ const App: React.FC = () => {
     localStorage.setItem('openaiBaseUrl', openaiBaseUrl);
     localStorage.setItem('openaiModel', openaiModel);
     localStorage.setItem('openaiKey', openaiKey);
+    localStorage.setItem('openaiStream', openaiStream.toString());
     localStorage.setItem('openaiModelsList', JSON.stringify(openaiModelsList));
-  }, [apiProvider, customGeminiKey, openaiBaseUrl, openaiModel, openaiKey, openaiModelsList]);
+  }, [apiProvider, customGeminiKey, openaiBaseUrl, openaiModel, openaiKey, openaiStream, openaiModelsList]);
 
   const handleCloseApiConfig = () => {
     if (apiProvider === 'openai-custom' && openaiModel && !openaiModelsList.includes(openaiModel)) {
@@ -424,21 +428,72 @@ const App: React.FC = () => {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${openaiKey}`
+                        'Authorization': `Bearer ${openaiKey}`,
+                        ...(openaiStream ? { 'Accept': 'text/event-stream' } : {})
                     },
                     body: JSON.stringify({
                         model: openaiModel,
                         messages: messages,
                         size: openaiSize,
                         n: 1, // Explicitly request 1 image per call to handle custom endpoints better
+                        ...(openaiStream ? { stream: true } : {})
                     })
                 });
                 if (!response.ok) {
                     throw new Error(`OpenAI API error: ${response.statusText}`);
                 }
-                const data = await response.json();
-                
+
                 const formatBase64 = (b64: string) => b64.startsWith('data:') ? b64 : `data:image/jpeg;base64,${b64}`;
+
+                if (openaiStream) {
+                    const reader = response.body?.getReader();
+                    const decoder = new TextDecoder("utf-8");
+                    let contentStr = "";
+                    if (reader) {
+                        let done = false;
+                        let buffer = "";
+                        while (!done) {
+                            const { value, done: readerDone } = await reader.read();
+                            done = readerDone;
+                            if (value) {
+                                buffer += decoder.decode(value, { stream: true });
+                                const lines = buffer.split("\n");
+                                buffer = lines.pop() || "";
+                                for (const line of lines) {
+                                    if (line.startsWith("data: ") && line.trim() !== "data: [DONE]") {
+                                        try {
+                                            const data = JSON.parse(line.substring(6));
+                                            if (data.choices?.[0]?.delta?.content) {
+                                                contentStr += data.choices[0].delta.content;
+                                            } else if (data.choices?.[0]?.delta?.image?.data) {
+                                                contentStr += data.choices[0].delta.image.data;
+                                            }
+                                        } catch (e) {
+                                            // Handle potential JSON parse errors on incomplete chunks safely
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    
+                    if (contentStr) {
+                         const match = contentStr.match(/!\[.*?\]\((.*?)\)/);
+                         if (match) {
+                             return match[1];
+                         }
+                         if (contentStr.startsWith('http') || contentStr.startsWith('data:image')) {
+                             return contentStr;
+                         }
+                         // If it's a long string and not a URL, it might be raw base64
+                         if (contentStr.length > 200) {
+                             return formatBase64(contentStr);
+                         }
+                    }
+                    return null;
+                }
+
+                const data = await response.json();
 
                 // 1. Check data.data[0].b64_json
                 if (data.data?.[0]?.b64_json) {
@@ -573,7 +628,7 @@ const App: React.FC = () => {
       } finally {
         setIsGenerating(false);
       }
-  }, [elements, selectedModel, aspectRatio, imageResolution, imageCount, apiProvider, customGeminiKey, openaiBaseUrl, openaiModel, openaiKey]);
+  }, [elements, selectedModel, aspectRatio, imageResolution, imageCount, apiProvider, customGeminiKey, openaiBaseUrl, openaiModel, openaiKey, openaiStream]);
 
 
   const handleSelectElement = useCallback((id: string | null, shiftKey: boolean) => {
@@ -1179,6 +1234,18 @@ const App: React.FC = () => {
                       autoComplete="new-password"
                       className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
                     />
+                  </div>
+                  <div className="flex items-center gap-2 mt-2">
+                    <input
+                      type="checkbox"
+                      id="openai-stream-toggle"
+                      checked={openaiStream}
+                      onChange={(e) => setOpenaiStream(e.target.checked)}
+                      className="w-4 h-4 text-purple-600 rounded border-gray-300 focus:ring-purple-500"
+                    />
+                    <label htmlFor="openai-stream-toggle" className="text-sm font-medium text-gray-700">
+                      Enable Stream
+                    </label>
                   </div>
                 </>
               )}
