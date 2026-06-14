@@ -15,6 +15,7 @@ interface ContextMenuProps {
   actions: {
     addNote: (position: Point) => void;
     addArrow: (position: Point) => void;
+    addLabel: (position: Point) => void;
     addDrawing: (position: Point) => void;
     editDrawing: (elementId: string) => void;
     addImage: (position: Point) => void;
@@ -147,6 +148,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ menuData, onClose, act
                 <>
                     <MenuItem onClick={() => handleAction(() => actions.addNote(menuData.worldPoint))}>Add Note</MenuItem>
                     <MenuItem onClick={() => handleAction(() => actions.addArrow(menuData.worldPoint))}>Add Arrow</MenuItem>
+                    <MenuItem onClick={() => handleAction(() => actions.addLabel(menuData.worldPoint))}>Add Label</MenuItem>
                     <MenuItem onClick={() => handleAction(() => actions.addDrawing(menuData.worldPoint))}>Add Drawing</MenuItem>
                     <MenuItem onClick={() => handleAction(() => actions.addImage(menuData.worldPoint))}>Add Image</MenuItem>
                 </>

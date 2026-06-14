@@ -3,7 +3,7 @@ export interface Point {
   y: number;
 }
 
-export type ElementType = 'note' | 'image' | 'arrow' | 'drawing' | 'iframe';
+export type ElementType = 'note' | 'image' | 'arrow' | 'label' | 'drawing' | 'iframe';
 
 interface BaseElement {
   id: string;
@@ -32,6 +32,14 @@ export interface ArrowElement extends BaseElement {
   color: string;
 }
 
+export interface LabelElement extends BaseElement {
+  type: 'label';
+  content: string;
+  textColor: string;
+  backgroundColor: string;
+  fontSize: number;
+}
+
 export interface DrawingElement extends BaseElement {
   type: 'drawing';
   src: string; // base64 data URL
@@ -44,4 +52,4 @@ export interface IFrameElement extends BaseElement {
   sourceMode: 'viewport' | 'fullpage';
 }
 
-export type CanvasElement = NoteElement | ImageElement | ArrowElement | DrawingElement | IFrameElement;
+export type CanvasElement = NoteElement | ImageElement | ArrowElement | LabelElement | DrawingElement | IFrameElement;

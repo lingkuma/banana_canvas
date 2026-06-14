@@ -180,8 +180,8 @@ export const TransformableElement: React.FC<TransformableElementProps> = ({ elem
         setInteraction(null);
     }, [interaction, onInteractionEnd]);
 
-    const handleDoubleClick = useCallback((e: React.MouseEvent) => {
-        if (element.type === 'note') {
+  const handleDoubleClick = useCallback((e: React.MouseEvent) => {
+        if (element.type === 'note' || element.type === 'label') {
             e.stopPropagation();
             setIsEditing(true);
             setTimeout(() => {
@@ -292,6 +292,31 @@ export const TransformableElement: React.FC<TransformableElementProps> = ({ elem
                                     className={`w-full h-full bg-transparent text-white text-center p-4 resize-none border-none focus:outline-none placeholder-gray-200/70 ${isEditing ? 'cursor-text' : 'cursor-move'}`}
                                     style={{ fontFamily: 'inherit', fontSize: 'inherit' }}
                                     placeholder="Write..."
+                                />
+                            </div>
+                        );
+                    case 'label':
+                        return (
+                            <div
+                                style={style}
+                                className={`rounded-md font-semibold flex items-center justify-center ${el.backgroundColor === 'transparent' ? '' : el.backgroundColor}`}
+                            >
+                                <textarea
+                                    ref={textareaRef}
+                                    value={el.content}
+                                    readOnly={!isEditing}
+                                    onChange={(e) => onUpdate({ ...el, content: e.target.value })}
+                                    onBlur={() => setIsEditing(false)}
+                                    onMouseDown={(e) => {
+                                      if (e.button !== 0) return;
+                                      onSelect(element.id, e.shiftKey);
+                                      if (isEditing) {
+                                        e.stopPropagation();
+                                      }
+                                    }}
+                                    className={`w-full h-full bg-transparent text-center p-2 resize-none border-none focus:outline-none ${el.textColor} ${isEditing ? 'cursor-text' : 'cursor-move'}`}
+                                    style={{ fontFamily: 'inherit', fontSize: el.fontSize, lineHeight: 1.25 }}
+                                    placeholder="Label..."
                                 />
                             </div>
                         );

@@ -4,11 +4,12 @@ import React, { useState } from 'react';
 interface GenerationPanelProps {
     isGenerating: boolean;
     images: string[];
+    annotationPreview: string | null;
     onAddToCanvas: (imageUrl: string) => void;
     onDelete: (index: number) => void;
 }
 
-export const GenerationPanel: React.FC<GenerationPanelProps> = ({ isGenerating, images, onAddToCanvas, onDelete }) => {
+export const GenerationPanel: React.FC<GenerationPanelProps> = ({ isGenerating, images, annotationPreview, onAddToCanvas, onDelete }) => {
     const [isOpen, setIsOpen] = useState(true);
 
     return (
@@ -31,6 +32,12 @@ export const GenerationPanel: React.FC<GenerationPanelProps> = ({ isGenerating, 
                 </div>
 
                 <div className="flex-grow overflow-y-auto pr-2 -mr-2 space-y-4">
+                    {annotationPreview && (
+                        <div className="border rounded-lg p-2 bg-gray-100/50 shadow-sm">
+                            <div className="text-xs font-semibold text-gray-600 mb-2">Latest annotation attachment</div>
+                            <img src={annotationPreview} alt="Latest annotation attachment" className="w-full h-auto object-contain rounded-md" />
+                        </div>
+                    )}
                     {isGenerating && (
                         <div className="flex flex-col items-center justify-center text-gray-700 p-4 border border-dashed rounded-lg">
                             <svg className="animate-spin h-8 w-8 text-purple-600 mb-3" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
