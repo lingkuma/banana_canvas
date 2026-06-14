@@ -53,3 +53,14 @@ export interface IFrameElement extends BaseElement {
 }
 
 export type CanvasElement = NoteElement | ImageElement | ArrowElement | LabelElement | DrawingElement | IFrameElement;
+
+export type GenerationStatus = 'generating' | 'completed' | 'failed';
+
+export interface GenerationItem {
+  id: string;
+  status: GenerationStatus;
+  images: string[];
+  requestedCount: number;
+  createdAt: number;
+  error?: string;
+}

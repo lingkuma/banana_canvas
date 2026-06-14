@@ -6,7 +6,7 @@ import { ContextMenu } from './components/ContextMenu';
 import { DrawingModal } from './components/DrawingModal';
 import { TrashModal } from './components/TrashModal';
 import { GenerationPanel } from './components/GenerationPanel';
-import type { CanvasElement, NoteElement, ImageElement, ArrowElement, LabelElement, DrawingElement, Point, ElementType, IFrameElement } from './types';
+import type { CanvasElement, NoteElement, ImageElement, ArrowElement, LabelElement, DrawingElement, Point, ElementType, IFrameElement, GenerationItem } from './types';
 import { useHistoryState } from './useHistoryState';
 
 export const COLORS = [
@@ -232,8 +232,7 @@ const App: React.FC = () => {
 
   const [selectedElementIds, setSelectedElementIds] = useState<string[]>([]);
   const [resetView, setResetView] = useState<() => void>(() => () => {});
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [generationHistory, setGenerationHistory] = useState<string[]>([]);
+  const [generationItems, setGenerationItems] = useState<GenerationItem[]>([]);
   const [lastAnnotationPreview, setLastAnnotationPreview] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuData | null>(null);
   const [editingDrawing, setEditingDrawing] = useState<DrawingElement | null>(null);
@@ -316,6 +315,7 @@ const App: React.FC = () => {
   const imageInputRef = useRef<HTMLInputElement>(null);
   const canvasApiRef = useRef<CanvasApi>(null);
   const lastImagePosition = useRef<Point | null>(null);
+  const generationControllersRef = useRef<Map<string, AbortController>>(new Map());
   const zIndexCounter = useRef(INITIAL_ELEMENTS.length);
   
   const checkProKey = useCallback(async () => {
@@ -331,6 +331,13 @@ const App: React.FC = () => {
     await window.aistudio.openSelectKey();
     setHasProKey(true); // Assume success per guidelines
   };
+
+  useEffect(() => {
+    return () => {
+      generationControllersRef.current.forEach(controller => controller.abort());
+      generationControllersRef.current.clear();
+    };
+  }, []);
 
   const addElement = useCallback((newElement: Omit<NoteElement, 'id' | 'zIndex'> | Omit<ImageElement, 'id' | 'zIndex'> | Omit<ArrowElement, 'id' | 'zIndex'> | Omit<LabelElement, 'id' | 'zIndex'> | Omit<DrawingElement, 'id' | 'zIndex'> | Omit<IFrameElement, 'id' | 'zIndex'>) => {
     const elementWithId: CanvasElement = {
@@ -571,6 +578,17 @@ const App: React.FC = () => {
     };
   }, [addImagesAtPosition, getCenterOfViewport, addIFrame, addElement]);
   
+  const isAbortError = (error: unknown) => {
+    return error instanceof DOMException && error.name === 'AbortError'
+      || typeof error === 'object' && error !== null && (error as any).name === 'AbortError';
+  };
+
+  const handleCancelGeneration = useCallback((taskId: string) => {
+    generationControllersRef.current.get(taskId)?.abort();
+    generationControllersRef.current.delete(taskId);
+    setGenerationItems(prev => prev.filter(item => item.id !== taskId));
+  }, []);
+
  const handleGenerate = useCallback(async (selectedElements: CanvasElement[]) => {
       const imageElements = selectedElements.filter(el => el.type === 'image' || el.type === 'drawing') as (ImageElement | DrawingElement)[];
       const annotationElements = selectedElements.filter(el => el.type === 'image' || el.type === 'drawing' || el.type === 'arrow' || el.type === 'label');
@@ -582,11 +600,36 @@ const App: React.FC = () => {
           return;
       }
 
-      setIsGenerating(true);
+      if (apiProvider === 'openai-custom' && !openaiKey) {
+          alert("OpenAI API key not available.");
+          return;
+      }
+
+      const geminiApiKey = apiProvider === 'gemini-custom' ? customGeminiKey : process.env.API_KEY;
+      if (apiProvider !== 'openai-custom' && !geminiApiKey) {
+          alert("Gemini API key not available.");
+          return;
+      }
+
+      const taskId = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+      const controller = new AbortController();
+      const { signal } = controller;
+      generationControllersRef.current.set(taskId, controller);
+      setGenerationItems(prev => [
+        ...prev,
+        {
+          id: taskId,
+          status: 'generating',
+          images: [],
+          requestedCount: imageCount,
+          createdAt: Date.now(),
+        },
+      ]);
 
       try {
         let instructions = noteElements.map(note => note.content).join(' \n');
         const annotationAttachment = await createAnnotationAttachment(selectedElements);
+        if (signal.aborted) return;
         setLastAnnotationPreview(annotationAttachment);
 
         if (activeIframeElements.length > 0) {
@@ -597,12 +640,6 @@ const App: React.FC = () => {
         }
 
         if (apiProvider === 'openai-custom') {
-            if (!openaiKey) {
-                alert("OpenAI API key not available.");
-                setIsGenerating(false);
-                return;
-            }
-
             const messages: any[] = [];
             if (imageElements.length > 0 || annotationAttachment) {
                 const content: any[] = [
@@ -637,6 +674,7 @@ const App: React.FC = () => {
                         'Authorization': `Bearer ${openaiKey}`,
                         ...(openaiStream ? { 'Accept': 'text/event-stream' } : {})
                     },
+                    signal,
                     body: JSON.stringify({
                         model: openaiModel,
                         messages: messages,
@@ -648,6 +686,7 @@ const App: React.FC = () => {
                 if (!response.ok) {
                     throw new Error(`OpenAI API error: ${response.statusText}`);
                 }
+                if (signal.aborted) return null;
 
                 const formatBase64 = (b64: string) => b64.startsWith('data:') ? b64 : `data:image/jpeg;base64,${b64}`;
 
@@ -659,6 +698,7 @@ const App: React.FC = () => {
                         let done = false;
                         let buffer = "";
                         while (!done) {
+                            if (signal.aborted) return null;
                             const { value, done: readerDone } = await reader.read();
                             done = readerDone;
                             if (value) {
@@ -700,6 +740,7 @@ const App: React.FC = () => {
                 }
 
                 const data = await response.json();
+                if (signal.aborted) return null;
 
                 // 1. Check data.data[0].b64_json
                 if (data.data?.[0]?.b64_json) {
@@ -740,31 +781,34 @@ const App: React.FC = () => {
                 return null;
             };
 
-            const promises = Array.from({ length: imageCount }, () => generateSingleImageOpenAI());
-            const images = await Promise.all(promises);
-            const validImages = images.filter((img): img is string => img !== null);
+            const results = await Promise.allSettled(Array.from({ length: imageCount }, () => generateSingleImageOpenAI()));
+            if (signal.aborted) return;
+            const validImages = results
+                .filter((result): result is PromiseFulfilledResult<string | null> => result.status === 'fulfilled')
+                .map(result => result.value)
+                .filter((img): img is string => img !== null);
             if (validImages.length > 0) {
-                setGenerationHistory(prev => [...validImages, ...prev]);
+                setGenerationItems(prev => prev.map(item => item.id === taskId ? {
+                    ...item,
+                    status: 'completed',
+                    images: validImages,
+                    error: validImages.length < imageCount ? 'Some images failed to generate.' : undefined,
+                } : item));
             } else {
-                alert("Failed to parse image URL from OpenAI response.");
+                throw new Error("Failed to parse image URL from OpenAI response.");
             }
 
         } else {
             // Default or Custom Gemini
-            const apiKey = apiProvider === 'gemini-custom' ? customGeminiKey : process.env.API_KEY;
-            if (!apiKey) {
-                alert("Gemini API key not available.");
-                setIsGenerating(false);
-                return;
-            }
-            const genAI = new GoogleGenAI({ apiKey });
+            const genAI = new GoogleGenAI({ apiKey: geminiApiKey as string });
 
             const commonConfig = {
                 responseModalities: [Modality.IMAGE, Modality.TEXT],
                 imageConfig: {
                     aspectRatio: aspectRatio,
                     imageSize: imageResolution
-                }
+                },
+                abortSignal: signal,
             };
 
             if (imageElements.length > 0 || annotationAttachment) { // Editing/Reimagining with existing images
@@ -789,7 +833,8 @@ const App: React.FC = () => {
                       contents: { parts },
                       config: commonConfig,
                   });
-                  for (const part of response.candidates[0].content.parts) {
+                  if (signal.aborted) return null;
+                  for (const part of response.candidates?.[0]?.content?.parts || []) {
                       if (part.inlineData) {
                           return `data:image/png;base64,${part.inlineData.data}`;
                       }
@@ -797,11 +842,21 @@ const App: React.FC = () => {
                   return null;
                 };
 
-                const promises = Array.from({ length: imageCount }, () => generateSingleImage());
-                const images = await Promise.all(promises);
-                const validImages = images.filter((img): img is string => img !== null);
+                const results = await Promise.allSettled(Array.from({ length: imageCount }, () => generateSingleImage()));
+                if (signal.aborted) return;
+                const validImages = results
+                    .filter((result): result is PromiseFulfilledResult<string | null> => result.status === 'fulfilled')
+                    .map(result => result.value)
+                    .filter((img): img is string => img !== null);
                 if (validImages.length > 0) {
-                    setGenerationHistory(prev => [...validImages, ...prev]);
+                    setGenerationItems(prev => prev.map(item => item.id === taskId ? {
+                        ...item,
+                        status: 'completed',
+                        images: validImages,
+                        error: validImages.length < imageCount ? 'Some images failed to generate.' : undefined,
+                    } : item));
+                } else {
+                    throw new Error("Failed to parse image data from Gemini response.");
                 }
 
             } else { // Generating new image from text description
@@ -813,7 +868,8 @@ const App: React.FC = () => {
                         contents: { parts: [{ text: promptText }] },
                         config: commonConfig,
                     });
-                    for (const part of response.candidates[0].content.parts) {
+                    if (signal.aborted) return null;
+                    for (const part of response.candidates?.[0]?.content?.parts || []) {
                         if (part.inlineData) {
                             return `data:image/png;base64,${part.inlineData.data}`;
                         }
@@ -821,24 +877,45 @@ const App: React.FC = () => {
                     return null;
                 };
 
-                const promises = Array.from({ length: imageCount }, () => generateSingleImage());
-                const images = await Promise.all(promises);
-                const validImages = images.filter((img): img is string => img !== null);
+                const results = await Promise.allSettled(Array.from({ length: imageCount }, () => generateSingleImage()));
+                if (signal.aborted) return;
+                const validImages = results
+                    .filter((result): result is PromiseFulfilledResult<string | null> => result.status === 'fulfilled')
+                    .map(result => result.value)
+                    .filter((img): img is string => img !== null);
                 if (validImages.length > 0) {
-                    setGenerationHistory(prev => [...validImages, ...prev]);
+                    setGenerationItems(prev => prev.map(item => item.id === taskId ? {
+                        ...item,
+                        status: 'completed',
+                        images: validImages,
+                        error: validImages.length < imageCount ? 'Some images failed to generate.' : undefined,
+                    } : item));
+                } else {
+                    throw new Error("Failed to parse image data from Gemini response.");
                 }
             }
         }
       } catch (error: any) {
+        if (isAbortError(error) || signal.aborted) {
+            return;
+        }
         console.error("Error generating image:", error);
         if (error?.message?.includes("Requested entity was not found.")) {
-            alert("Model access error. Please ensure you have a valid paid project API key selected.");
+            setGenerationItems(prev => prev.map(item => item.id === taskId ? {
+                ...item,
+                status: 'failed',
+                error: "Model access error. Please ensure you have a valid paid project API key selected.",
+            } : item));
             setHasProKey(false);
         } else {
-            alert("Failed to generate image. Please check the console for details.");
+            setGenerationItems(prev => prev.map(item => item.id === taskId ? {
+                ...item,
+                status: 'failed',
+                error: error?.message || "Failed to generate image.",
+            } : item));
         }
       } finally {
-        setIsGenerating(false);
+        generationControllersRef.current.delete(taskId);
       }
   }, [elements, selectedModel, aspectRatio, imageResolution, imageCount, apiProvider, customGeminiKey, openaiBaseUrl, openaiModel, openaiKey, openaiStream]);
 
@@ -1075,8 +1152,14 @@ const App: React.FC = () => {
     img.src = src;
   }, [addElement, getCenterOfViewport]);
   
-  const handleDeleteGeneratedImage = (indexToDelete: number) => {
-      setGenerationHistory(prev => prev.filter((_, index) => index !== indexToDelete));
+  const handleDeleteGeneratedImage = (taskId: string, imageIndex: number) => {
+      setGenerationItems(prev => prev
+        .map(item => item.id === taskId ? {
+            ...item,
+            images: item.images.filter((_, index) => index !== imageIndex),
+        } : item)
+        .filter(item => item.status !== 'completed' || item.images.length > 0)
+      );
   };
 
   const downloadImage = useCallback((elementId: string) => {
@@ -1318,11 +1401,11 @@ const App: React.FC = () => {
       </div>
 
       <GenerationPanel
-          isGenerating={isGenerating}
-          images={generationHistory}
+          generationItems={generationItems}
           annotationPreview={lastAnnotationPreview}
           onAddToCanvas={addGeneratedImageToCanvas}
           onDelete={handleDeleteGeneratedImage}
+          onCancelTask={handleCancelGeneration}
       />
       
       <InfiniteCanvas 
