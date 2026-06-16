@@ -89,6 +89,23 @@ const getBoundingBox = (elements: CanvasElement[]) => {
   return { minX, minY, maxX, maxY, width: maxX - minX, height: maxY - minY };
 };
 
+const isPointInBounds = (point: Point, bounds: Bounds) => (
+  point.x >= bounds.x
+  && point.x <= bounds.x + bounds.width
+  && point.y >= bounds.y
+  && point.y <= bounds.y + bounds.height
+);
+
+const isElementInBounds = (element: CanvasElement, bounds: Bounds) => (
+  isPointInBounds(element.position, bounds)
+  || getRotatedCorners(element).some(corner => isPointInBounds(corner, bounds))
+);
+
+const getElementsInBounds = (elements: CanvasElement[], bounds: Bounds, excludedIds: string[] = []) => {
+  const excludedSet = new Set(excludedIds);
+  return elements.filter(el => !excludedSet.has(el.id) && isElementInBounds(el, bounds));
+};
+
 const drawArrow = (ctx: CanvasRenderingContext2D, el: ArrowElement) => {
   const strokeColor = colorClassToCanvasColor(el.color);
   const length = Math.max(el.width, 10);
@@ -997,8 +1014,9 @@ const App: React.FC = () => {
       setWorkflowGroups(prev => prev.map(group => group.id === groupId ? { ...group, bounds } : group));
       if (!group || !dragDelta) return;
 
-      const inputIds = new Set(group.inputElementIds);
-      setElements(prev => prev.map(el => {
+      setElements(prev => {
+          const inputIds = new Set(getElementsInBounds(prev, group.bounds, [group.outputElementId]).map(input => input.id));
+          return prev.map(el => {
           if (!inputIds.has(el.id)) return el;
           if (el.type === 'arrow') {
               return {
@@ -1012,7 +1030,8 @@ const App: React.FC = () => {
               ...el,
               position: { x: el.position.x + dragDelta.x, y: el.position.y + dragDelta.y },
           };
-      }), { addToHistory: false });
+          });
+      }, { addToHistory: false });
   }, [workflowGroups, setElements]);
 
   const handleUngroup = useCallback((groupId: string) => {
@@ -1027,7 +1046,7 @@ const App: React.FC = () => {
       const group = workflowGroups.find(item => item.id === groupId);
       if (!group || group.status === 'generating') return;
 
-      const inputElements = elements.filter(el => group.inputElementIds.includes(el.id));
+      const inputElements = getElementsInBounds(elements, group.bounds, [group.outputElementId]);
       const pendingInputs = inputElements.filter(el => el.type === 'image' && el.isWorkflowOutput && el.workflowStatus !== 'completed');
       if (pendingInputs.length > 0) {
           setWorkflowGroups(prev => prev.map(item => item.id === groupId ? { ...item, status: 'waiting' } : item));
@@ -1041,13 +1060,11 @@ const App: React.FC = () => {
   }, [elements, workflowGroups, handleGenerate]);
 
   useEffect(() => {
-      const elementById = new Map(elements.map(el => [el.id, el]));
       const readyGroupIds = workflowGroups
           .filter(group => group.status === 'idle' || group.status === 'waiting')
           .filter(group => {
-              const workflowInputs = group.inputElementIds
-                  .map(id => elementById.get(id))
-                  .filter((el): el is ImageElement => !!el && el.type === 'image' && !!el.isWorkflowOutput);
+              const workflowInputs = getElementsInBounds(elements, group.bounds, [group.outputElementId])
+                  .filter((el): el is ImageElement => el.type === 'image' && !!el.isWorkflowOutput);
 
               return workflowInputs.length > 0
                   && workflowInputs.every(el => el.workflowStatus === 'completed' && !!el.src);
