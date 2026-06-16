@@ -6,7 +6,7 @@ import { ContextMenu } from './components/ContextMenu';
 import { DrawingModal } from './components/DrawingModal';
 import { TrashModal } from './components/TrashModal';
 import { GenerationPanel } from './components/GenerationPanel';
-import type { CanvasElement, NoteElement, ImageElement, ArrowElement, LabelElement, DrawingElement, Point, ElementType, IFrameElement, GenerationItem } from './types';
+import type { CanvasElement, NoteElement, ImageElement, ArrowElement, LabelElement, DrawingElement, Point, ElementType, IFrameElement, GenerationItem, WorkflowGroup, Bounds } from './types';
 import { useHistoryState } from './useHistoryState';
 
 export const COLORS = [
@@ -233,6 +233,7 @@ const App: React.FC = () => {
   const [selectedElementIds, setSelectedElementIds] = useState<string[]>([]);
   const [resetView, setResetView] = useState<() => void>(() => () => {});
   const [generationItems, setGenerationItems] = useState<GenerationItem[]>([]);
+  const [workflowGroups, setWorkflowGroups] = useState<WorkflowGroup[]>([]);
   const [lastAnnotationPreview, setLastAnnotationPreview] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuData | null>(null);
   const [editingDrawing, setEditingDrawing] = useState<DrawingElement | null>(null);
@@ -589,7 +590,10 @@ const App: React.FC = () => {
     setGenerationItems(prev => prev.filter(item => item.id !== taskId));
   }, []);
 
- const handleGenerate = useCallback(async (selectedElements: CanvasElement[]) => {
+ const handleGenerate = useCallback(async (
+      selectedElements: CanvasElement[],
+      workflowTarget?: { groupId: string; outputElementId: string }
+    ) => {
       const imageElements = selectedElements.filter(el => el.type === 'image' || el.type === 'drawing') as (ImageElement | DrawingElement)[];
       const annotationElements = selectedElements.filter(el => el.type === 'image' || el.type === 'drawing' || el.type === 'arrow' || el.type === 'label');
       const noteElements = selectedElements.filter(el => el.type === 'note') as NoteElement[];
@@ -615,16 +619,73 @@ const App: React.FC = () => {
       const controller = new AbortController();
       const { signal } = controller;
       generationControllersRef.current.set(taskId, controller);
-      setGenerationItems(prev => [
-        ...prev,
-        {
-          id: taskId,
+      if (workflowTarget) {
+        setWorkflowGroups(prev => prev.map(group => group.id === workflowTarget.groupId ? {
+          ...group,
           status: 'generating',
-          images: [],
-          requestedCount: imageCount,
-          createdAt: Date.now(),
-        },
-      ]);
+          error: undefined,
+        } : group));
+        setElements(prev => prev.map(el => el.id === workflowTarget.outputElementId && el.type === 'image' ? {
+          ...el,
+          workflowStatus: 'generating',
+        } : el), { addToHistory: false });
+      } else {
+        setGenerationItems(prev => [
+          ...prev,
+          {
+            id: taskId,
+            status: 'generating',
+            images: [],
+            requestedCount: imageCount,
+            createdAt: Date.now(),
+          },
+        ]);
+      }
+
+      const completeGeneration = (validImages: string[]) => {
+        if (workflowTarget) {
+          const firstImage = validImages[0];
+          setElements(prev => prev.map(el => el.id === workflowTarget.outputElementId && el.type === 'image' ? {
+            ...el,
+            src: firstImage,
+            workflowStatus: 'completed',
+          } : el), { addToHistory: true });
+          setWorkflowGroups(prev => prev.map(group => group.id === workflowTarget.groupId ? {
+            ...group,
+            status: 'completed',
+            error: validImages.length < imageCount ? 'Some images failed to generate.' : undefined,
+          } : group));
+          return;
+        }
+
+        setGenerationItems(prev => prev.map(item => item.id === taskId ? {
+          ...item,
+          status: 'completed',
+          images: validImages,
+          error: validImages.length < imageCount ? 'Some images failed to generate.' : undefined,
+        } : item));
+      };
+
+      const failGeneration = (message: string) => {
+        if (workflowTarget) {
+          setElements(prev => prev.map(el => el.id === workflowTarget.outputElementId && el.type === 'image' ? {
+            ...el,
+            workflowStatus: 'failed',
+          } : el), { addToHistory: false });
+          setWorkflowGroups(prev => prev.map(group => group.id === workflowTarget.groupId ? {
+            ...group,
+            status: 'failed',
+            error: message,
+          } : group));
+          return;
+        }
+
+        setGenerationItems(prev => prev.map(item => item.id === taskId ? {
+          ...item,
+          status: 'failed',
+          error: message,
+        } : item));
+      };
 
       try {
         let instructions = noteElements.map(note => note.content).join(' \n');
@@ -788,12 +849,7 @@ const App: React.FC = () => {
                 .map(result => result.value)
                 .filter((img): img is string => img !== null);
             if (validImages.length > 0) {
-                setGenerationItems(prev => prev.map(item => item.id === taskId ? {
-                    ...item,
-                    status: 'completed',
-                    images: validImages,
-                    error: validImages.length < imageCount ? 'Some images failed to generate.' : undefined,
-                } : item));
+                completeGeneration(validImages);
             } else {
                 throw new Error("Failed to parse image URL from OpenAI response.");
             }
@@ -849,12 +905,7 @@ const App: React.FC = () => {
                     .map(result => result.value)
                     .filter((img): img is string => img !== null);
                 if (validImages.length > 0) {
-                    setGenerationItems(prev => prev.map(item => item.id === taskId ? {
-                        ...item,
-                        status: 'completed',
-                        images: validImages,
-                        error: validImages.length < imageCount ? 'Some images failed to generate.' : undefined,
-                    } : item));
+                    completeGeneration(validImages);
                 } else {
                     throw new Error("Failed to parse image data from Gemini response.");
                 }
@@ -884,12 +935,7 @@ const App: React.FC = () => {
                     .map(result => result.value)
                     .filter((img): img is string => img !== null);
                 if (validImages.length > 0) {
-                    setGenerationItems(prev => prev.map(item => item.id === taskId ? {
-                        ...item,
-                        status: 'completed',
-                        images: validImages,
-                        error: validImages.length < imageCount ? 'Some images failed to generate.' : undefined,
-                    } : item));
+                    completeGeneration(validImages);
                 } else {
                     throw new Error("Failed to parse image data from Gemini response.");
                 }
@@ -901,23 +947,96 @@ const App: React.FC = () => {
         }
         console.error("Error generating image:", error);
         if (error?.message?.includes("Requested entity was not found.")) {
-            setGenerationItems(prev => prev.map(item => item.id === taskId ? {
-                ...item,
-                status: 'failed',
-                error: "Model access error. Please ensure you have a valid paid project API key selected.",
-            } : item));
+            failGeneration("Model access error. Please ensure you have a valid paid project API key selected.");
             setHasProKey(false);
         } else {
-            setGenerationItems(prev => prev.map(item => item.id === taskId ? {
-                ...item,
-                status: 'failed',
-                error: error?.message || "Failed to generate image.",
-            } : item));
+            failGeneration(error?.message || "Failed to generate image.");
         }
       } finally {
         generationControllersRef.current.delete(taskId);
       }
-  }, [elements, selectedModel, aspectRatio, imageResolution, imageCount, apiProvider, customGeminiKey, openaiBaseUrl, openaiModel, openaiKey, openaiStream]);
+  }, [elements, selectedModel, aspectRatio, imageResolution, imageCount, apiProvider, customGeminiKey, openaiBaseUrl, openaiModel, openaiKey, openaiStream, setElements]);
+
+  const handleCreateGroup = useCallback((bounds: Bounds, inputElementIds: string[]) => {
+      const groupId = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+      const outputElementId = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+      const outputWidth = Math.max(160, Math.min(bounds.width, 420));
+      const outputHeight = Math.max(120, Math.min(bounds.height, 420));
+      const outputElement: ImageElement = {
+          id: outputElementId,
+          type: 'image',
+          position: {
+              x: bounds.x + bounds.width + 48 + outputWidth / 2,
+              y: bounds.y + bounds.height / 2,
+          },
+          width: outputWidth,
+          height: outputHeight,
+          rotation: 0,
+          zIndex: zIndexCounter.current++,
+          src: '',
+          isWorkflowOutput: true,
+          workflowGroupId: groupId,
+          workflowStatus: 'idle',
+      };
+
+      setElements(prev => [...prev, outputElement]);
+      setWorkflowGroups(prev => [
+          ...prev,
+          {
+              id: groupId,
+              bounds,
+              inputElementIds,
+              outputElementId,
+              status: 'idle',
+          },
+      ]);
+  }, [setElements]);
+
+  const handleUpdateGroupBounds = useCallback((groupId: string, bounds: Bounds) => {
+      setWorkflowGroups(prev => prev.map(group => group.id === groupId ? { ...group, bounds } : group));
+  }, []);
+
+  const handleUngroup = useCallback((groupId: string) => {
+      const group = workflowGroups.find(item => item.id === groupId);
+      setWorkflowGroups(prev => prev.filter(item => item.id !== groupId));
+      if (group) {
+          setElements(prev => prev.filter(el => el.id !== group.outputElementId));
+      }
+  }, [workflowGroups, setElements]);
+
+  const handleStartGroup = useCallback((groupId: string) => {
+      const group = workflowGroups.find(item => item.id === groupId);
+      if (!group || group.status === 'generating') return;
+
+      const inputElements = elements.filter(el => group.inputElementIds.includes(el.id));
+      const pendingInputs = inputElements.filter(el => el.type === 'image' && el.isWorkflowOutput && el.workflowStatus !== 'completed');
+      if (pendingInputs.length > 0) {
+          setWorkflowGroups(prev => prev.map(item => item.id === groupId ? { ...item, status: 'waiting' } : item));
+          return;
+      }
+
+      void handleGenerate(inputElements, {
+          groupId,
+          outputElementId: group.outputElementId,
+      });
+  }, [elements, workflowGroups, handleGenerate]);
+
+  useEffect(() => {
+      const elementById = new Map(elements.map(el => [el.id, el]));
+      const readyGroupIds = workflowGroups
+          .filter(group => group.status === 'idle' || group.status === 'waiting')
+          .filter(group => {
+              const workflowInputs = group.inputElementIds
+                  .map(id => elementById.get(id))
+                  .filter((el): el is ImageElement => !!el && el.type === 'image' && !!el.isWorkflowOutput);
+
+              return workflowInputs.length > 0
+                  && workflowInputs.every(el => el.workflowStatus === 'completed' && !!el.src);
+          })
+          .map(group => group.id);
+
+      readyGroupIds.forEach(groupId => handleStartGroup(groupId));
+  }, [elements, workflowGroups, handleStartGroup]);
 
 
   const handleSelectElement = useCallback((id: string | null, shiftKey: boolean) => {
@@ -996,6 +1115,8 @@ const App: React.FC = () => {
           if (elementsToTrash.length > 0) {
               setTrashedElements(prevTrashed => [...prevTrashed, ...elementsToTrash]);
               setSelectedElementIds([]);
+              const trashedSet = new Set(elementsToTrash.map(el => el.id));
+              setWorkflowGroups(prevGroups => prevGroups.filter(group => !trashedSet.has(group.outputElementId)));
           }
           return remainingElements;
       });
@@ -1418,6 +1539,11 @@ const App: React.FC = () => {
         onInteractionEnd={handleInteractionEnd}
         setResetViewCallback={getResetViewCallback} 
         onGenerate={handleGenerate}
+        workflowGroups={workflowGroups}
+        onCreateGroup={handleCreateGroup}
+        onStartGroup={handleStartGroup}
+        onUngroup={handleUngroup}
+        onUpdateGroupBounds={handleUpdateGroupBounds}
         onContextMenu={handleContextMenu}
         onEditDrawing={handleEditDrawing}
         onImageDrop={handleImageDrop}

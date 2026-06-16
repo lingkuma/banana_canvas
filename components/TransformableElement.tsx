@@ -321,6 +321,38 @@ export const TransformableElement: React.FC<TransformableElementProps> = ({ elem
                             </div>
                         );
                     case 'image':
+                        if (el.isWorkflowOutput) {
+                            const status = el.workflowStatus || (el.src ? 'completed' : 'idle');
+                            const statusClass = status === 'completed'
+                                ? 'bg-green-500'
+                                : status === 'generating'
+                                    ? 'bg-yellow-400 animate-pulse'
+                                    : status === 'failed'
+                                        ? 'bg-red-500'
+                                        : 'bg-gray-400';
+                            const label = status === 'completed'
+                                ? 'Generated'
+                                : status === 'generating'
+                                    ? 'Generating'
+                                    : status === 'failed'
+                                        ? 'Failed'
+                                        : 'Ready';
+
+                            return (
+                                <div style={style} className="relative shadow-lg rounded-md overflow-visible bg-white border border-gray-200">
+                                    <div className={`absolute -top-7 left-0 right-0 h-5 rounded-t-md text-[11px] font-semibold text-white flex items-center justify-center ${statusClass}`}>
+                                        {label}
+                                    </div>
+                                    {el.src ? (
+                                        <img src={el.src} alt="Workflow output" className="w-full h-full rounded-md object-cover" draggable="false" />
+                                    ) : (
+                                        <div className="w-full h-full rounded-md border-2 border-dashed border-gray-300 bg-gray-50 flex items-center justify-center text-xs font-medium text-gray-400">
+                                            Output
+                                        </div>
+                                    )}
+                                </div>
+                            );
+                        }
                         return (
                             <img src={el.src} alt="User upload" style={style} className="shadow-lg rounded-md object-cover" draggable="false" />
                         );

@@ -23,6 +23,9 @@ export interface NoteElement extends BaseElement {
 export interface ImageElement extends BaseElement {
   type: 'image';
   src: string;
+  isWorkflowOutput?: boolean;
+  workflowGroupId?: string;
+  workflowStatus?: 'idle' | 'generating' | 'completed' | 'failed';
 }
 
 export interface ArrowElement extends BaseElement {
@@ -62,5 +65,23 @@ export interface GenerationItem {
   images: string[];
   requestedCount: number;
   createdAt: number;
+  error?: string;
+}
+
+export interface Bounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export type WorkflowGroupStatus = 'idle' | 'waiting' | 'generating' | 'completed' | 'failed';
+
+export interface WorkflowGroup {
+  id: string;
+  bounds: Bounds;
+  inputElementIds: string[];
+  outputElementId: string;
+  status: WorkflowGroupStatus;
   error?: string;
 }
