@@ -16,7 +16,7 @@ interface InfiniteCanvasProps {
   onCreateGroup: (bounds: Bounds, inputElementIds: string[]) => void;
   onStartGroup: (groupId: string) => void;
   onUngroup: (groupId: string) => void;
-  onUpdateGroupBounds: (groupId: string, bounds: Bounds) => void;
+  onUpdateGroupBounds: (groupId: string, bounds: Bounds, dragDelta?: Point) => void;
   onContextMenu: (e: React.MouseEvent, worldPoint: Point, elementId: string | null) => void;
   onEditDrawing: (elementId: string) => void;
   onImageDrop: (files: FileList, position: Point) => void;
@@ -39,10 +39,13 @@ interface BoundingBox {
     height: number;
 }
 
-type GroupDrag = {
+type GroupInteractionType = 'move' | 'resize-nw' | 'resize-n' | 'resize-ne' | 'resize-e' | 'resize-se' | 'resize-s' | 'resize-sw' | 'resize-w';
+
+type GroupInteraction = {
+  type: GroupInteractionType;
   groupId: string;
-  startPoint: Point;
-  startBounds: Bounds;
+  lastPoint: Point;
+  currentBounds: Bounds;
 } | null;
 
 export interface CanvasApi {
@@ -51,6 +54,73 @@ export interface CanvasApi {
 
 const MIN_ZOOM = 0.1;
 const MAX_ZOOM = 5;
+const MIN_GROUP_WIDTH = 80;
+const MIN_GROUP_HEIGHT = 60;
+
+const resizeGroupBounds = (bounds: Bounds, type: GroupInteractionType, dx: number, dy: number): Bounds => {
+  const handle = type.replace('resize-', '');
+  let nextX = bounds.x;
+  let nextY = bounds.y;
+  let nextWidth = bounds.width;
+  let nextHeight = bounds.height;
+
+  if (handle.includes('e')) nextWidth += dx;
+  if (handle.includes('s')) nextHeight += dy;
+  if (handle.includes('w')) {
+    nextX += dx;
+    nextWidth -= dx;
+  }
+  if (handle.includes('n')) {
+    nextY += dy;
+    nextHeight -= dy;
+  }
+
+  if (nextWidth < MIN_GROUP_WIDTH) {
+    if (handle.includes('w')) nextX = bounds.x + bounds.width - MIN_GROUP_WIDTH;
+    nextWidth = MIN_GROUP_WIDTH;
+  }
+  if (nextHeight < MIN_GROUP_HEIGHT) {
+    if (handle.includes('n')) nextY = bounds.y + bounds.height - MIN_GROUP_HEIGHT;
+    nextHeight = MIN_GROUP_HEIGHT;
+  }
+
+  return {
+    x: nextX,
+    y: nextY,
+    width: nextWidth,
+    height: nextHeight,
+  };
+};
+
+const getGroupResizeHandleStyle = (handle: string): React.CSSProperties => {
+  const style: React.CSSProperties = { width: 10, height: 10 };
+  if (handle.includes('n')) style.top = -5;
+  if (handle.includes('s')) style.bottom = -5;
+  if (handle.includes('w')) style.left = -5;
+  if (handle.includes('e')) style.right = -5;
+  if (handle === 'n' || handle === 's') { style.left = '50%'; style.transform = 'translateX(-50%)'; }
+  if (handle === 'w' || handle === 'e') { style.top = '50%'; style.transform = 'translateY(-50%)'; }
+  return style;
+};
+
+const getGroupResizeHandleCursor = (handle: string): string => {
+  switch (handle) {
+    case 'n':
+    case 's':
+      return 'cursor-ns-resize';
+    case 'w':
+    case 'e':
+      return 'cursor-ew-resize';
+    case 'nw':
+    case 'se':
+      return 'cursor-nwse-resize';
+    case 'ne':
+    case 'sw':
+      return 'cursor-nesw-resize';
+    default:
+      return '';
+  }
+};
 
 export const InfiniteCanvas = forwardRef<CanvasApi, InfiniteCanvasProps>(({ 
   elements, 
@@ -80,10 +150,11 @@ export const InfiniteCanvas = forwardRef<CanvasApi, InfiniteCanvasProps>(({
   const [isSpacebarPressed, setIsSpacebarPressed] = useState(false);
   const [marqueeRect, setMarqueeRect] = useState<MarqueeRect | null>(null);
   const [selectionBounds, setSelectionBounds] = useState<Bounds | null>(null);
-  const [groupDrag, setGroupDrag] = useState<GroupDrag>(null);
+  const [activeGroupInteraction, setActiveGroupInteraction] = useState(false);
   const [isDraggingOver, setIsDraggingOver] = useState(false);
 
   const canvasRef = useRef<HTMLDivElement>(null);
+  const groupInteractionRef = useRef<GroupInteraction>(null);
   
   const screenToWorld = useCallback((screenPoint: Point): Point => {
     return {
@@ -164,20 +235,40 @@ export const InfiniteCanvas = forwardRef<CanvasApi, InfiniteCanvasProps>(({
   }, [isPanning, startPan, marqueeRect]);
 
   useEffect(() => {
-    if (!groupDrag) return;
+    if (!activeGroupInteraction) return;
 
     const handleMove = (e: MouseEvent) => {
-      const dx = (e.clientX - groupDrag.startPoint.x) / zoom;
-      const dy = (e.clientY - groupDrag.startPoint.y) / zoom;
-      onUpdateGroupBounds(groupDrag.groupId, {
-        ...groupDrag.startBounds,
-        x: groupDrag.startBounds.x + dx,
-        y: groupDrag.startBounds.y + dy,
-      });
+      const interaction = groupInteractionRef.current;
+      if (!interaction) return;
+
+      const dx = (e.clientX - interaction.lastPoint.x) / zoom;
+      const dy = (e.clientY - interaction.lastPoint.y) / zoom;
+      if (dx === 0 && dy === 0) return;
+
+      const nextBounds = interaction.type === 'move'
+        ? {
+            ...interaction.currentBounds,
+            x: interaction.currentBounds.x + dx,
+            y: interaction.currentBounds.y + dy,
+          }
+        : resizeGroupBounds(interaction.currentBounds, interaction.type, dx, dy);
+
+      groupInteractionRef.current = {
+        ...interaction,
+        lastPoint: { x: e.clientX, y: e.clientY },
+        currentBounds: nextBounds,
+      };
+
+      onUpdateGroupBounds(
+        interaction.groupId,
+        nextBounds,
+        interaction.type === 'move' ? { x: dx, y: dy } : undefined
+      );
     };
 
     const handleEnd = () => {
-      setGroupDrag(null);
+      groupInteractionRef.current = null;
+      setActiveGroupInteraction(false);
       onInteractionEnd();
     };
 
@@ -187,7 +278,7 @@ export const InfiniteCanvas = forwardRef<CanvasApi, InfiniteCanvasProps>(({
       window.removeEventListener('mousemove', handleMove);
       window.removeEventListener('mouseup', handleEnd);
     };
-  }, [groupDrag, zoom, onUpdateGroupBounds, onInteractionEnd]);
+  }, [activeGroupInteraction, zoom, onUpdateGroupBounds, onInteractionEnd]);
 
   const handleWheel = useCallback((e: React.WheelEvent<HTMLDivElement>) => {
     e.preventDefault();
@@ -314,6 +405,19 @@ export const InfiniteCanvas = forwardRef<CanvasApi, InfiniteCanvasProps>(({
     })
     .filter((connector): connector is NonNullable<typeof connector> => connector !== null);
 
+  const startGroupInteraction = (e: React.MouseEvent, group: WorkflowGroup, type: GroupInteractionType) => {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    setSelectionBounds(null);
+    groupInteractionRef.current = {
+      type,
+      groupId: group.id,
+      lastPoint: { x: e.clientX, y: e.clientY },
+      currentBounds: group.bounds,
+    };
+    setActiveGroupInteraction(true);
+  };
+
   let cursorClass = 'cursor-default';
   if (isSpacebarPressed || isPanning) {
     cursorClass = isPanning ? 'cursor-grabbing' : 'cursor-grab';
@@ -386,24 +490,7 @@ export const InfiniteCanvas = forwardRef<CanvasApi, InfiniteCanvasProps>(({
           transformOrigin: '0 0',
         }}
       >
-        {sortedElements.map((el) => (
-          <TransformableElement
-            key={el.id}
-            element={el}
-            zoom={zoom}
-            isSelected={selectedElementIds.includes(el.id)}
-            onSelect={onSelectElement}
-            onUpdate={onUpdateElement}
-            onInteractionEnd={onInteractionEnd}
-            onContextMenu={(e) => {
-              const worldPoint = screenToWorld({x: e.clientX, y: e.clientY});
-              onContextMenu(e, worldPoint, el.id);
-            }}
-            onEditDrawing={onEditDrawing}
-            onTrashElement={onTrashElement}
-          />
-        ))}
-        <svg className="absolute overflow-visible pointer-events-none" style={{ left: 0, top: 0, width: 1, height: 1 }}>
+        <svg className="absolute overflow-visible pointer-events-none" style={{ left: 0, top: 0, width: 1, height: 1, zIndex: -1000 }}>
           {connectors.map(connector => {
             const midX = (connector.from.x + connector.to.x) / 2;
             const color = connector.status === 'completed'
@@ -425,28 +512,56 @@ export const InfiniteCanvas = forwardRef<CanvasApi, InfiniteCanvasProps>(({
         </svg>
         {workflowGroups.map(group => (
           <div
-            key={group.id}
-            className="workflow-group absolute border-2 border-blue-600/70 bg-blue-50/10"
+            key={`${group.id}-border`}
+            className="absolute border-2 border-blue-600/70 bg-blue-50/10 pointer-events-none"
+            style={{
+              left: group.bounds.x,
+              top: group.bounds.y,
+              width: group.bounds.width,
+              height: group.bounds.height,
+              zIndex: -999,
+            }}
+          />
+        ))}
+        {sortedElements.map((el) => (
+          <TransformableElement
+            key={el.id}
+            element={el}
+            zoom={zoom}
+            isSelected={selectedElementIds.includes(el.id)}
+            onSelect={onSelectElement}
+            onUpdate={onUpdateElement}
+            onInteractionEnd={onInteractionEnd}
+            onContextMenu={(e) => {
+              const worldPoint = screenToWorld({x: e.clientX, y: e.clientY});
+              onContextMenu(e, worldPoint, el.id);
+            }}
+            onEditDrawing={onEditDrawing}
+            onTrashElement={onTrashElement}
+          />
+        ))}
+        {workflowGroups.map(group => (
+          <div
+            key={`${group.id}-controls`}
+            className="workflow-group absolute pointer-events-none"
             style={{
               left: group.bounds.x,
               top: group.bounds.y,
               width: group.bounds.width,
               height: group.bounds.height,
               zIndex: 10000,
-              cursor: group.status === 'generating' ? 'default' : 'move',
-            }}
-            onMouseDown={(e) => {
-              if (e.button !== 0 || (e.target as HTMLElement).closest('button')) return;
-              e.stopPropagation();
-              setSelectionBounds(null);
-              setGroupDrag({
-                groupId: group.id,
-                startPoint: { x: e.clientX, y: e.clientY },
-                startBounds: group.bounds,
-              });
             }}
           >
-            <div className="absolute -top-8 right-0 flex items-center gap-1">
+            <div className="absolute -top-8 right-0 flex items-center gap-1 pointer-events-auto">
+              <button
+                title="Move group"
+                className="w-7 h-7 text-xs font-semibold bg-white text-gray-700 border border-gray-300 rounded shadow hover:bg-gray-100 cursor-move flex items-center justify-center"
+                onMouseDown={(e) => startGroupInteraction(e, group, 'move')}
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16">
+                  <path d="M8 0 5.5 2.5h2v3h-3v-2L2 6l2.5 2.5v-2h3v3h-2L8 12l2.5-2.5h-2v-3h3v2L14 6l-2.5-2.5v2h-3v-3h2z"/>
+                </svg>
+              </button>
               <button
                 className="px-2 py-1 text-[11px] font-semibold bg-green-600 text-white rounded shadow hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-wait"
                 onClick={(e) => {
@@ -467,6 +582,14 @@ export const InfiniteCanvas = forwardRef<CanvasApi, InfiniteCanvasProps>(({
                 Ungroup
               </button>
             </div>
+            {(['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'] as const).map(handle => (
+              <div
+                key={handle}
+                className={`absolute bg-white border-2 border-blue-600 pointer-events-auto ${getGroupResizeHandleCursor(handle)}`}
+                style={getGroupResizeHandleStyle(handle)}
+                onMouseDown={(e) => startGroupInteraction(e, group, `resize-${handle}` as GroupInteractionType)}
+              />
+            ))}
           </div>
         ))}
         {selectionBbox && (

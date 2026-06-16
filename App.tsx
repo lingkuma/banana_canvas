@@ -960,13 +960,13 @@ const App: React.FC = () => {
   const handleCreateGroup = useCallback((bounds: Bounds, inputElementIds: string[]) => {
       const groupId = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
       const outputElementId = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
-      const outputWidth = Math.max(160, Math.min(bounds.width, 420));
-      const outputHeight = Math.max(120, Math.min(bounds.height, 420));
+      const outputWidth = Math.max(96, Math.min(bounds.width * 0.5, 260));
+      const outputHeight = Math.max(72, Math.min(bounds.height * 0.5, 260));
       const outputElement: ImageElement = {
           id: outputElementId,
           type: 'image',
           position: {
-              x: bounds.x + bounds.width + 48 + outputWidth / 2,
+              x: bounds.x + bounds.width + 32 + outputWidth / 2,
               y: bounds.y + bounds.height / 2,
           },
           width: outputWidth,
@@ -992,9 +992,28 @@ const App: React.FC = () => {
       ]);
   }, [setElements]);
 
-  const handleUpdateGroupBounds = useCallback((groupId: string, bounds: Bounds) => {
+  const handleUpdateGroupBounds = useCallback((groupId: string, bounds: Bounds, dragDelta?: Point) => {
+      const group = workflowGroups.find(item => item.id === groupId);
       setWorkflowGroups(prev => prev.map(group => group.id === groupId ? { ...group, bounds } : group));
-  }, []);
+      if (!group || !dragDelta) return;
+
+      const inputIds = new Set(group.inputElementIds);
+      setElements(prev => prev.map(el => {
+          if (!inputIds.has(el.id)) return el;
+          if (el.type === 'arrow') {
+              return {
+                  ...el,
+                  position: { x: el.position.x + dragDelta.x, y: el.position.y + dragDelta.y },
+                  start: { x: el.start.x + dragDelta.x, y: el.start.y + dragDelta.y },
+                  end: { x: el.end.x + dragDelta.x, y: el.end.y + dragDelta.y },
+              };
+          }
+          return {
+              ...el,
+              position: { x: el.position.x + dragDelta.x, y: el.position.y + dragDelta.y },
+          };
+      }), { addToHistory: false });
+  }, [workflowGroups, setElements]);
 
   const handleUngroup = useCallback((groupId: string) => {
       const group = workflowGroups.find(item => item.id === groupId);
