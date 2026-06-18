@@ -17,6 +17,7 @@ interface InfiniteCanvasProps {
   onStartGroup: (groupId: string) => void;
   onUngroup: (groupId: string) => void;
   onUpdateGroupBounds: (groupId: string, bounds: Bounds, dragDelta?: Point) => void;
+  onSelectionBoundsChange: (bounds: Bounds | null) => void;
   onContextMenu: (e: React.MouseEvent, worldPoint: Point, elementId: string | null) => void;
   onEditDrawing: (elementId: string) => void;
   onImageDrop: (files: FileList, position: Point) => void;
@@ -136,6 +137,7 @@ export const InfiniteCanvas = forwardRef<CanvasApi, InfiniteCanvasProps>(({
   onStartGroup,
   onUngroup,
   onUpdateGroupBounds,
+  onSelectionBoundsChange,
   onContextMenu,
   onEditDrawing,
   onImageDrop,
@@ -318,6 +320,10 @@ export const InfiniteCanvas = forwardRef<CanvasApi, InfiniteCanvasProps>(({
   useEffect(() => {
     setResetViewCallback(resetView);
   }, [resetView, setResetViewCallback]);
+
+  useEffect(() => {
+    onSelectionBoundsChange(selectionBounds);
+  }, [onSelectionBoundsChange, selectionBounds]);
   
   const getRotatedCorners = (el: CanvasElement): Point[] => {
     const { x, y } = el.position;

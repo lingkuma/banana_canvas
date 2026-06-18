@@ -33,6 +33,11 @@ interface ContextMenuData {
     elementId: string | null;
 }
 
+interface InternalClipboardSnapshot {
+  elements: CanvasElement[];
+  bounds: ReturnType<typeof getBoundingBox>;
+}
+
 const getRandomPosition = () => ({
   x: Math.floor(Math.random() * 400) - 200,
   y: Math.floor(Math.random() * 400) - 200
@@ -161,6 +166,84 @@ const drawLabel = (ctx: CanvasRenderingContext2D, el: LabelElement) => {
   ctx.restore();
 };
 
+const drawRoundedRect = (
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  radius: number
+) => {
+  const normalizedRadius = Math.min(radius, width / 2, height / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + normalizedRadius, y);
+  ctx.lineTo(x + width - normalizedRadius, y);
+  ctx.quadraticCurveTo(x + width, y, x + width, y + normalizedRadius);
+  ctx.lineTo(x + width, y + height - normalizedRadius);
+  ctx.quadraticCurveTo(x + width, y + height, x + width - normalizedRadius, y + height);
+  ctx.lineTo(x + normalizedRadius, y + height);
+  ctx.quadraticCurveTo(x, y + height, x, y + height - normalizedRadius);
+  ctx.lineTo(x, y + normalizedRadius);
+  ctx.quadraticCurveTo(x, y, x + normalizedRadius, y);
+  ctx.closePath();
+};
+
+const wrapCanvasText = (
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  maxWidth: number
+) => {
+  const wrappedLines: string[] = [];
+  text.split('\n').forEach(rawLine => {
+    const words = rawLine.split(/\s+/).filter(Boolean);
+    if (words.length === 0) {
+      wrappedLines.push('');
+      return;
+    }
+
+    let line = '';
+    words.forEach(word => {
+      const candidate = line ? `${line} ${word}` : word;
+      if (ctx.measureText(candidate).width <= maxWidth || !line) {
+        line = candidate;
+      } else {
+        wrappedLines.push(line);
+        line = word;
+      }
+    });
+    wrappedLines.push(line);
+  });
+  return wrappedLines;
+};
+
+const drawNote = (ctx: CanvasRenderingContext2D, el: NoteElement) => {
+  ctx.save();
+  ctx.translate(el.position.x, el.position.y);
+  ctx.rotate(el.rotation * Math.PI / 180);
+
+  const x = -el.width / 2;
+  const y = -el.height / 2;
+  drawRoundedRect(ctx, x, y, el.width, el.height, 8);
+  ctx.fillStyle = colorClassToCanvasColor(el.color, '#2563eb');
+  ctx.fill();
+
+  const fontSize = 16;
+  ctx.fillStyle = '#ffffff';
+  ctx.font = `500 ${fontSize}px Arial, sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  const lines = wrapCanvasText(ctx, el.content, Math.max(20, el.width - 28));
+  const lineHeight = fontSize * 1.25;
+  const maxLines = Math.max(1, Math.floor((el.height - 20) / lineHeight));
+  const visibleLines = lines.slice(0, maxLines);
+  const startY = -((visibleLines.length - 1) * lineHeight) / 2;
+  visibleLines.forEach((line, index) => {
+    ctx.fillText(line, 0, startY + index * lineHeight, el.width - 28);
+  });
+  ctx.restore();
+};
+
 const drawImageCover = (
   ctx: CanvasRenderingContext2D,
   img: HTMLImageElement,
@@ -237,6 +320,110 @@ const createAnnotationAttachment = async (selectedElements: CanvasElement[]) => 
   return canvas.toDataURL('image/png');
 };
 
+const canvasToBlob = (canvas: HTMLCanvasElement, type = 'image/png') => new Promise<Blob | null>(resolve => {
+  canvas.toBlob(blob => resolve(blob), type);
+});
+
+const renderElementsToPngBlob = async (
+  selectedElements: CanvasElement[],
+  renderBounds?: Bounds | null
+) => {
+  const compositableElements = selectedElements
+    .filter(el => el.type !== 'iframe')
+    .sort((a, b) => a.zIndex - b.zIndex);
+
+  if (compositableElements.length === 0) return null;
+
+  const elementBounds = getBoundingBox(compositableElements);
+  const padding = renderBounds ? 0 : 24;
+  const bounds = renderBounds
+    ? {
+        minX: renderBounds.x,
+        minY: renderBounds.y,
+        maxX: renderBounds.x + renderBounds.width,
+        maxY: renderBounds.y + renderBounds.height,
+        width: renderBounds.width,
+        height: renderBounds.height,
+      }
+    : elementBounds;
+  const targetWidth = Math.max(1, Math.ceil(bounds.width + padding * 2));
+  const targetHeight = Math.max(1, Math.ceil(bounds.height + padding * 2));
+  const scale = Math.min(1, 4096 / Math.max(targetWidth, targetHeight));
+
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(targetWidth * scale));
+  canvas.height = Math.max(1, Math.round(targetHeight * scale));
+
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return null;
+
+  ctx.scale(scale, scale);
+  ctx.clearRect(0, 0, targetWidth, targetHeight);
+  ctx.translate(-bounds.minX + padding, -bounds.minY + padding);
+
+  for (const el of compositableElements) {
+    if ((el.type === 'image' || el.type === 'drawing') && el.src) {
+      const img = await loadImage(el.src);
+      ctx.save();
+      ctx.translate(el.position.x, el.position.y);
+      ctx.rotate(el.rotation * Math.PI / 180);
+      if (el.type === 'image') {
+        drawImageCover(ctx, img, -el.width / 2, -el.height / 2, el.width, el.height);
+      } else {
+        ctx.drawImage(img, -el.width / 2, -el.height / 2, el.width, el.height);
+      }
+      ctx.restore();
+    } else if (el.type === 'note') {
+      drawNote(ctx, el);
+    } else if (el.type === 'arrow') {
+      drawArrow(ctx, el);
+    } else if (el.type === 'label') {
+      drawLabel(ctx, el);
+    }
+  }
+
+  return canvasToBlob(canvas, 'image/png');
+};
+
+const renderImageElementToPngBlob = async (el: ImageElement | DrawingElement) => {
+  if (!el.src) return null;
+  const img = await loadImage(el.src);
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(el.width));
+  canvas.height = Math.max(1, Math.round(el.height));
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return null;
+  if (el.type === 'image') {
+    drawImageCover(ctx, img, 0, 0, el.width, el.height);
+  } else {
+    ctx.drawImage(img, 0, 0, el.width, el.height);
+  }
+  return canvasToBlob(canvas, 'image/png');
+};
+
+const writePngBlobToClipboard = async (blob: Blob) => {
+  if (!navigator.clipboard || typeof ClipboardItem === 'undefined') {
+    throw new Error('Image clipboard is not supported in this browser.');
+  }
+  await navigator.clipboard.write([
+    new ClipboardItem({ 'image/png': blob })
+  ]);
+};
+
+const isEditableTarget = (target: EventTarget | null) => {
+  const element = target as HTMLElement | null;
+  if (!element) return false;
+  return element.tagName === 'INPUT'
+    || element.tagName === 'TEXTAREA'
+    || element.isContentEditable;
+};
+
+const getTextElementContent = (el: CanvasElement) => {
+  if (el.type === 'note' || el.type === 'label') return el.content;
+  if (el.type === 'iframe') return el.url;
+  return '';
+};
+
 const App: React.FC = () => {
   const { 
     state: elements, 
@@ -256,6 +443,7 @@ const App: React.FC = () => {
   const [editingDrawing, setEditingDrawing] = useState<DrawingElement | null>(null);
   const [trashedElements, setTrashedElements] = useState<CanvasElement[]>([]);
   const [isTrashModalOpen, setIsTrashModalOpen] = useState(false);
+  const [activeSelectionBounds, setActiveSelectionBounds] = useState<Bounds | null>(null);
   
   // Model and API Key State
   const [selectedModel, setSelectedModel] = useState<'gemini-2.5-flash-image' | 'gemini-3-pro-image-preview' | 'gemini-2.0-flash'>('gemini-2.5-flash-image');
@@ -333,6 +521,8 @@ const App: React.FC = () => {
   const imageInputRef = useRef<HTMLInputElement>(null);
   const canvasApiRef = useRef<CanvasApi>(null);
   const lastImagePosition = useRef<Point | null>(null);
+  const lastPointerWorldPosition = useRef<Point | null>(null);
+  const internalClipboardRef = useRef<InternalClipboardSnapshot | null>(null);
   const generationControllersRef = useRef<Map<string, AbortController>>(new Map());
   const zIndexCounter = useRef(INITIAL_ELEMENTS.length);
   
@@ -543,7 +733,157 @@ const App: React.FC = () => {
   }, [addImagesAtPosition]);
 
   useEffect(() => {
+    const handleMouseMove = (event: MouseEvent) => {
+      if (!canvasApiRef.current) return;
+      lastPointerWorldPosition.current = canvasApiRef.current.screenToWorld({
+        x: event.clientX,
+        y: event.clientY,
+      });
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+    };
+  }, []);
+
+  useEffect(() => {
+    const clearInternalClipboard = () => {
+      internalClipboardRef.current = null;
+    };
+
+    window.addEventListener('blur', clearInternalClipboard);
+    return () => {
+      window.removeEventListener('blur', clearInternalClipboard);
+    };
+  }, []);
+
+  const getPastePosition = useCallback((): Point => {
+    return lastPointerWorldPosition.current || getCenterOfViewport();
+  }, [getCenterOfViewport]);
+
+  const getElementsForClipboard = useCallback(() => {
+    const selectedElements = activeSelectionBounds
+      ? elements.filter(el => isElementInBounds(el, activeSelectionBounds))
+      : elements.filter(el => selectedElementIds.includes(el.id));
+
+    return selectedElements.sort((a, b) => {
+      if (Math.abs(a.position.y - b.position.y) > 12) return a.position.y - b.position.y;
+      return a.position.x - b.position.x;
+    });
+  }, [activeSelectionBounds, elements, selectedElementIds]);
+
+  const pasteInternalClipboard = useCallback((position: Point) => {
+    const snapshot = internalClipboardRef.current;
+    if (!snapshot || snapshot.elements.length === 0) return false;
+
+    const center = {
+      x: snapshot.bounds.minX + snapshot.bounds.width / 2,
+      y: snapshot.bounds.minY + snapshot.bounds.height / 2,
+    };
+    const delta = {
+      x: position.x - center.x,
+      y: position.y - center.y,
+    };
+    const baseZIndex = zIndexCounter.current;
+
+    const pastedElements = snapshot.elements
+      .sort((a, b) => a.zIndex - b.zIndex)
+      .map((el, index) => {
+        const pasted = {
+          ...el,
+          id: `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
+          position: {
+            x: el.position.x + delta.x,
+            y: el.position.y + delta.y,
+          },
+          zIndex: baseZIndex + index,
+        } as CanvasElement;
+
+        if (pasted.type === 'arrow') {
+          pasted.start = { x: pasted.start.x + delta.x, y: pasted.start.y + delta.y };
+          pasted.end = { x: pasted.end.x + delta.x, y: pasted.end.y + delta.y };
+        }
+
+        return pasted;
+      });
+
+    zIndexCounter.current += pastedElements.length;
+    setElements(prev => [...prev, ...pastedElements]);
+    setSelectedElementIds(pastedElements.map(el => el.id));
+    setActiveSelectionBounds(null);
+    return true;
+  }, [setElements]);
+
+  const copySelectionToClipboard = useCallback(async (clipboardData?: DataTransfer | null) => {
+    const selectedForCopy = getElementsForClipboard();
+    if (selectedForCopy.length === 0) return false;
+
+    internalClipboardRef.current = {
+      elements: selectedForCopy.map(el => ({ ...el })),
+      bounds: getBoundingBox(selectedForCopy),
+    };
+    try {
+      clipboardData?.setData('application/x-banana-canvas-elements', JSON.stringify({
+        copiedAt: Date.now(),
+        elementCount: selectedForCopy.length,
+      }));
+    } catch (error) {
+      console.warn('Custom canvas clipboard metadata could not be written:', error);
+    }
+
+    const textLikeElements = selectedForCopy.filter(el => el.type === 'note' || el.type === 'label' || el.type === 'iframe');
+    const onlyTextLike = textLikeElements.length === selectedForCopy.length;
+    const imageLikeElements = selectedForCopy.filter((el): el is ImageElement | DrawingElement => el.type === 'image' || el.type === 'drawing');
+    const visualElements = selectedForCopy.filter(el => el.type === 'image' || el.type === 'drawing' || el.type === 'arrow');
+
+    if (onlyTextLike) {
+      const text = textLikeElements
+        .map(getTextElementContent)
+        .filter(Boolean)
+        .join('\n');
+      clipboardData?.setData('text/plain', text);
+      if (!clipboardData && navigator.clipboard) {
+        await navigator.clipboard.writeText(text);
+      }
+      return true;
+    }
+
+    if (selectedForCopy.length === 1 && imageLikeElements.length === 1) {
+      const blob = await renderImageElementToPngBlob(imageLikeElements[0]);
+      if (!blob) return false;
+      await writePngBlobToClipboard(blob);
+      return true;
+    }
+
+    if (imageLikeElements.length > 0 || visualElements.length > 0) {
+      const blob = await renderElementsToPngBlob(selectedForCopy, activeSelectionBounds);
+      if (!blob) return false;
+      await writePngBlobToClipboard(blob);
+      return true;
+    }
+
+    const text = selectedForCopy.map(getTextElementContent).filter(Boolean).join('\n');
+    if (text) {
+      clipboardData?.setData('text/plain', text);
+      if (!clipboardData && navigator.clipboard) {
+        await navigator.clipboard.writeText(text);
+      }
+      return true;
+    }
+
+    return false;
+  }, [activeSelectionBounds, getElementsForClipboard]);
+
+  useEffect(() => {
     const handlePaste = (event: ClipboardEvent) => {
+        if (isEditableTarget(event.target)) return;
+
+        if (pasteInternalClipboard(getPastePosition())) {
+            event.preventDefault();
+            return;
+        }
+
         const items = event.clipboardData?.items;
         if (!items) return;
 
@@ -552,7 +892,7 @@ const App: React.FC = () => {
             .map(item => item.getAsFile() as File);
         
         if (imageFiles.length > 0) {
-            const position = getCenterOfViewport();
+            const position = getPastePosition();
             addImagesAtPosition(imageFiles, position);
             event.preventDefault();
             return;
@@ -567,7 +907,7 @@ const App: React.FC = () => {
                 try {
                     const url = new URL(pastedString);
                     if ((url.protocol === "http:" || url.protocol === "https:") && url.hostname.includes('.')) {
-                         const position = getCenterOfViewport();
+                         const position = getPastePosition();
                          addIFrame(pastedString, position);
                          event.preventDefault();
                     } else {
@@ -575,7 +915,7 @@ const App: React.FC = () => {
                     }
                 } catch (_) {
                     // Not a valid URL, create a note
-                    const position = getCenterOfViewport();
+                    const position = getPastePosition();
                     addElement({
                       type: 'note',
                       position: position,
@@ -594,7 +934,24 @@ const App: React.FC = () => {
     return () => {
         window.removeEventListener('paste', handlePaste);
     };
-  }, [addImagesAtPosition, getCenterOfViewport, addIFrame, addElement]);
+  }, [addImagesAtPosition, getPastePosition, addIFrame, addElement, pasteInternalClipboard]);
+
+  useEffect(() => {
+    const handleCopy = (event: ClipboardEvent) => {
+      if (isEditableTarget(event.target)) return;
+      if (selectedElementIds.length === 0 && !activeSelectionBounds) return;
+
+      event.preventDefault();
+      void copySelectionToClipboard(event.clipboardData).catch(error => {
+        console.error('Failed to copy selected canvas elements:', error);
+      });
+    };
+
+    window.addEventListener('copy', handleCopy);
+    return () => {
+      window.removeEventListener('copy', handleCopy);
+    };
+  }, [activeSelectionBounds, copySelectionToClipboard, selectedElementIds.length]);
   
   const isAbortError = (error: unknown) => {
     return error instanceof DOMException && error.name === 'AbortError'
@@ -1079,9 +1436,14 @@ const App: React.FC = () => {
     if (contextMenu) setContextMenu(null);
 
     if (id === null) {
-      if (!shiftKey) setSelectedElementIds([]);
+      if (!shiftKey) {
+        setSelectedElementIds([]);
+        setActiveSelectionBounds(null);
+      }
       return;
     }
+
+    setActiveSelectionBounds(null);
     
     setSelectedElementIds(prevIds => {
       if (shiftKey) {
@@ -1334,6 +1696,13 @@ const App: React.FC = () => {
     }
   }, [elements]);
 
+  const handleCopySelectionClick = useCallback(() => {
+    void copySelectionToClipboard().catch(error => {
+      console.error('Failed to copy selected canvas elements:', error);
+      alert('Failed to copy the current selection.');
+    });
+  }, [copySelectionToClipboard]);
+
   const handleContextMenu = useCallback((e: React.MouseEvent, worldPoint: Point, elementId: string | null) => {
       e.preventDefault();
       
@@ -1537,6 +1906,7 @@ const App: React.FC = () => {
             </div>
              <button onClick={bringToFront} disabled={selectedElementIds.length === 0} className="px-3 py-2 text-sm bg-gray-700 text-white rounded-md hover:bg-gray-800 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors">↑ Bring to Front</button>
              <button onClick={sendToBack} disabled={selectedElementIds.length === 0} className="px-3 py-2 text-sm bg-gray-500 text-white rounded-md hover:bg-gray-600 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors">↓ Send to Back</button>
+             <button onClick={handleCopySelectionClick} disabled={selectedElementIds.length === 0 && !activeSelectionBounds} className="px-3 py-2 text-sm bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors">Copy</button>
              <button onClick={deleteElement} disabled={selectedElementIds.length === 0} className="px-3 py-2 text-sm bg-red-600 text-white rounded-md hover:bg-red-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors">Delete</button>
             <button onClick={resetView} className="px-3 py-2 text-sm bg-gray-600 text-white rounded-md hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-opacity-50 transition-colors">Reset View</button>
             <button 
@@ -1580,6 +1950,7 @@ const App: React.FC = () => {
         onStartGroup={handleStartGroup}
         onUngroup={handleUngroup}
         onUpdateGroupBounds={handleUpdateGroupBounds}
+        onSelectionBoundsChange={setActiveSelectionBounds}
         onContextMenu={handleContextMenu}
         onEditDrawing={handleEditDrawing}
         onImageDrop={handleImageDrop}
@@ -1610,6 +1981,7 @@ const App: React.FC = () => {
             deleteElement,
             bringToFront,
             sendToBack,
+            copySelection: handleCopySelectionClick,
             changeColor: handleColorChange,
             downloadImage,
           }}

@@ -22,6 +22,7 @@ interface ContextMenuProps {
     deleteElement: () => void;
     bringToFront: () => void;
     sendToBack: () => void;
+    copySelection: () => void;
     changeColor: (color: string) => void;
     downloadImage: (elementId: string) => void;
   };
@@ -137,6 +138,8 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ menuData, onClose, act
                              </div>
                          )}
                     </div>
+                    <div className="border-t my-1 border-gray-200" />
+                    <MenuItem onClick={() => handleAction(actions.copySelection)}>Copy</MenuItem>
                     <div className="border-t my-1 border-gray-200" />
                     <MenuItem onClick={() => handleAction(actions.bringToFront)}>↑ Bring to Front</MenuItem>
                     <MenuItem onClick={() => handleAction(actions.sendToBack)}>↓ Send to Back</MenuItem>
