@@ -3,7 +3,7 @@ export interface Point {
   y: number;
 }
 
-export type ElementType = 'note' | 'image' | 'arrow' | 'drawing' | 'iframe';
+export type ElementType = 'note' | 'image' | 'arrow' | 'label' | 'drawing' | 'iframe';
 
 interface BaseElement {
   id: string;
@@ -23,6 +23,9 @@ export interface NoteElement extends BaseElement {
 export interface ImageElement extends BaseElement {
   type: 'image';
   src: string;
+  isWorkflowOutput?: boolean;
+  workflowGroupId?: string;
+  workflowStatus?: 'idle' | 'generating' | 'completed' | 'failed';
 }
 
 export interface ArrowElement extends BaseElement {
@@ -30,6 +33,14 @@ export interface ArrowElement extends BaseElement {
   start: Point;
   end: Point;
   color: string;
+}
+
+export interface LabelElement extends BaseElement {
+  type: 'label';
+  content: string;
+  textColor: string;
+  backgroundColor: string;
+  fontSize: number;
 }
 
 export interface DrawingElement extends BaseElement {
@@ -44,4 +55,33 @@ export interface IFrameElement extends BaseElement {
   sourceMode: 'viewport' | 'fullpage';
 }
 
-export type CanvasElement = NoteElement | ImageElement | ArrowElement | DrawingElement | IFrameElement;
+export type CanvasElement = NoteElement | ImageElement | ArrowElement | LabelElement | DrawingElement | IFrameElement;
+
+export type GenerationStatus = 'generating' | 'completed' | 'failed';
+
+export interface GenerationItem {
+  id: string;
+  status: GenerationStatus;
+  images: string[];
+  requestedCount: number;
+  createdAt: number;
+  error?: string;
+}
+
+export interface Bounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export type WorkflowGroupStatus = 'idle' | 'waiting' | 'generating' | 'completed' | 'failed';
+
+export interface WorkflowGroup {
+  id: string;
+  bounds: Bounds;
+  inputElementIds: string[];
+  outputElementId: string;
+  status: WorkflowGroupStatus;
+  error?: string;
+}

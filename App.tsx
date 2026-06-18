@@ -6,7 +6,7 @@ import { ContextMenu } from './components/ContextMenu';
 import { DrawingModal } from './components/DrawingModal';
 import { TrashModal } from './components/TrashModal';
 import { GenerationPanel } from './components/GenerationPanel';
-import type { CanvasElement, NoteElement, ImageElement, ArrowElement, DrawingElement, Point, ElementType, IFrameElement } from './types';
+import type { CanvasElement, NoteElement, ImageElement, ArrowElement, LabelElement, DrawingElement, Point, ElementType, IFrameElement, GenerationItem, WorkflowGroup, Bounds } from './types';
 import { useHistoryState } from './useHistoryState';
 
 export const COLORS = [
@@ -38,6 +38,205 @@ const getRandomPosition = () => ({
   y: Math.floor(Math.random() * 400) - 200
 });
 
+const colorClassToCanvasColor = (className: string, fallback = '#ef4444') => {
+  const colorMap: Record<string, string> = {
+    gray: '#374151',
+    red: '#ef4444',
+    orange: '#f97316',
+    yellow: '#eab308',
+    green: '#22c55e',
+    blue: '#2563eb',
+    purple: '#9333ea',
+    pink: '#ec4899',
+    white: '#ffffff',
+    black: '#111827',
+  };
+  const match = className.match(/(?:bg|text)-([a-z]+)-\d+/);
+  return match ? colorMap[match[1]] || fallback : fallback;
+};
+
+const loadImage = (src: string) => new Promise<HTMLImageElement>((resolve, reject) => {
+  const img = new Image();
+  img.onload = () => resolve(img);
+  img.onerror = () => reject(new Error('Failed to load image for annotation attachment.'));
+  img.src = src;
+});
+
+const getRotatedCorners = (el: CanvasElement): Point[] => {
+  const rad = el.rotation * (Math.PI / 180);
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  const halfW = el.width / 2;
+  const halfH = el.height / 2;
+
+  return [
+    { x: -halfW, y: -halfH },
+    { x: halfW, y: -halfH },
+    { x: halfW, y: halfH },
+    { x: -halfW, y: halfH },
+  ].map(corner => ({
+    x: el.position.x + corner.x * cos - corner.y * sin,
+    y: el.position.y + corner.x * sin + corner.y * cos,
+  }));
+};
+
+const getBoundingBox = (elements: CanvasElement[]) => {
+  const allCorners = elements.flatMap(getRotatedCorners);
+  const minX = Math.min(...allCorners.map(c => c.x));
+  const minY = Math.min(...allCorners.map(c => c.y));
+  const maxX = Math.max(...allCorners.map(c => c.x));
+  const maxY = Math.max(...allCorners.map(c => c.y));
+  return { minX, minY, maxX, maxY, width: maxX - minX, height: maxY - minY };
+};
+
+const isPointInBounds = (point: Point, bounds: Bounds) => (
+  point.x >= bounds.x
+  && point.x <= bounds.x + bounds.width
+  && point.y >= bounds.y
+  && point.y <= bounds.y + bounds.height
+);
+
+const isElementInBounds = (element: CanvasElement, bounds: Bounds) => (
+  isPointInBounds(element.position, bounds)
+  || getRotatedCorners(element).some(corner => isPointInBounds(corner, bounds))
+);
+
+const getElementsInBounds = (elements: CanvasElement[], bounds: Bounds, excludedIds: string[] = []) => {
+  const excludedSet = new Set(excludedIds);
+  return elements.filter(el => !excludedSet.has(el.id) && isElementInBounds(el, bounds));
+};
+
+const drawArrow = (ctx: CanvasRenderingContext2D, el: ArrowElement) => {
+  const strokeColor = colorClassToCanvasColor(el.color);
+  const length = Math.max(el.width, 10);
+  const height = Math.max(el.height, 30);
+  const headLength = Math.min(22, Math.max(12, length * 0.18));
+
+  ctx.save();
+  ctx.translate(el.position.x, el.position.y);
+  ctx.rotate(el.rotation * Math.PI / 180);
+  ctx.strokeStyle = strokeColor;
+  ctx.lineWidth = 4;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+
+  const startX = -length / 2;
+  const endX = length / 2;
+  ctx.beginPath();
+  ctx.moveTo(startX, 0);
+  ctx.lineTo(endX - headLength * 0.55, 0);
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.moveTo(endX - headLength, -height / 3);
+  ctx.lineTo(endX - 4, 0);
+  ctx.lineTo(endX - headLength, height / 3);
+  ctx.stroke();
+  ctx.restore();
+};
+
+const drawLabel = (ctx: CanvasRenderingContext2D, el: LabelElement) => {
+  ctx.save();
+  ctx.translate(el.position.x, el.position.y);
+  ctx.rotate(el.rotation * Math.PI / 180);
+
+  const background = colorClassToCanvasColor(el.backgroundColor, 'transparent');
+  if (el.backgroundColor !== 'transparent') {
+    ctx.fillStyle = background;
+    ctx.fillRect(-el.width / 2, -el.height / 2, el.width, el.height);
+  }
+
+  const fontSize = Math.max(10, el.fontSize || 24);
+  ctx.fillStyle = colorClassToCanvasColor(el.textColor, '#ef4444');
+  ctx.font = `600 ${fontSize}px Arial, sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  const lines = el.content.split('\n');
+  const lineHeight = fontSize * 1.25;
+  const startY = -((lines.length - 1) * lineHeight) / 2;
+  lines.forEach((line, index) => {
+    ctx.fillText(line, 0, startY + index * lineHeight, el.width - 16);
+  });
+  ctx.restore();
+};
+
+const drawImageCover = (
+  ctx: CanvasRenderingContext2D,
+  img: HTMLImageElement,
+  x: number,
+  y: number,
+  width: number,
+  height: number
+) => {
+  const sourceRatio = img.width / img.height;
+  const targetRatio = width / height;
+  let sourceX = 0;
+  let sourceY = 0;
+  let sourceWidth = img.width;
+  let sourceHeight = img.height;
+
+  if (sourceRatio > targetRatio) {
+    sourceWidth = img.height * targetRatio;
+    sourceX = (img.width - sourceWidth) / 2;
+  } else {
+    sourceHeight = img.width / targetRatio;
+    sourceY = (img.height - sourceHeight) / 2;
+  }
+
+  ctx.drawImage(img, sourceX, sourceY, sourceWidth, sourceHeight, x, y, width, height);
+};
+
+const createAnnotationAttachment = async (selectedElements: CanvasElement[]) => {
+  const hasAnnotationLayer = selectedElements.some(el => el.type === 'arrow' || el.type === 'label');
+  if (!hasAnnotationLayer) return null;
+
+  const compositableElements = selectedElements
+    .filter(el => el.type === 'image' || el.type === 'drawing' || el.type === 'arrow' || el.type === 'label')
+    .sort((a, b) => a.zIndex - b.zIndex);
+
+  if (compositableElements.length === 0) return null;
+
+  const bounds = getBoundingBox(compositableElements);
+  const padding = 24;
+  const targetWidth = Math.max(1, Math.ceil(bounds.width + padding * 2));
+  const targetHeight = Math.max(1, Math.ceil(bounds.height + padding * 2));
+  const scale = Math.min(1, 4096 / Math.max(targetWidth, targetHeight));
+
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(targetWidth * scale));
+  canvas.height = Math.max(1, Math.round(targetHeight * scale));
+
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return null;
+
+  ctx.scale(scale, scale);
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, targetWidth, targetHeight);
+  ctx.translate(-bounds.minX + padding, -bounds.minY + padding);
+
+  for (const el of compositableElements) {
+    if ((el.type === 'image' || el.type === 'drawing') && el.src) {
+      const img = await loadImage(el.src);
+      ctx.save();
+      ctx.translate(el.position.x, el.position.y);
+      ctx.rotate(el.rotation * Math.PI / 180);
+      if (el.type === 'image') {
+        drawImageCover(ctx, img, -el.width / 2, -el.height / 2, el.width, el.height);
+      } else {
+        ctx.drawImage(img, -el.width / 2, -el.height / 2, el.width, el.height);
+      }
+      ctx.restore();
+    } else if (el.type === 'arrow') {
+      drawArrow(ctx, el);
+    } else if (el.type === 'label') {
+      drawLabel(ctx, el);
+    }
+  }
+
+  return canvas.toDataURL('image/png');
+};
+
 const App: React.FC = () => {
   const { 
     state: elements, 
@@ -50,8 +249,9 @@ const App: React.FC = () => {
 
   const [selectedElementIds, setSelectedElementIds] = useState<string[]>([]);
   const [resetView, setResetView] = useState<() => void>(() => () => {});
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [generationHistory, setGenerationHistory] = useState<string[]>([]);
+  const [generationItems, setGenerationItems] = useState<GenerationItem[]>([]);
+  const [workflowGroups, setWorkflowGroups] = useState<WorkflowGroup[]>([]);
+  const [lastAnnotationPreview, setLastAnnotationPreview] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuData | null>(null);
   const [editingDrawing, setEditingDrawing] = useState<DrawingElement | null>(null);
   const [trashedElements, setTrashedElements] = useState<CanvasElement[]>([]);
@@ -133,6 +333,7 @@ const App: React.FC = () => {
   const imageInputRef = useRef<HTMLInputElement>(null);
   const canvasApiRef = useRef<CanvasApi>(null);
   const lastImagePosition = useRef<Point | null>(null);
+  const generationControllersRef = useRef<Map<string, AbortController>>(new Map());
   const zIndexCounter = useRef(INITIAL_ELEMENTS.length);
   
   const checkProKey = useCallback(async () => {
@@ -149,7 +350,14 @@ const App: React.FC = () => {
     setHasProKey(true); // Assume success per guidelines
   };
 
-  const addElement = useCallback((newElement: Omit<NoteElement, 'id' | 'zIndex'> | Omit<ImageElement, 'id' | 'zIndex'> | Omit<ArrowElement, 'id' | 'zIndex'> | Omit<DrawingElement, 'id' | 'zIndex'> | Omit<IFrameElement, 'id' | 'zIndex'>) => {
+  useEffect(() => {
+    return () => {
+      generationControllersRef.current.forEach(controller => controller.abort());
+      generationControllersRef.current.clear();
+    };
+  }, []);
+
+  const addElement = useCallback((newElement: Omit<NoteElement, 'id' | 'zIndex'> | Omit<ImageElement, 'id' | 'zIndex'> | Omit<ArrowElement, 'id' | 'zIndex'> | Omit<LabelElement, 'id' | 'zIndex'> | Omit<DrawingElement, 'id' | 'zIndex'> | Omit<IFrameElement, 'id' | 'zIndex'>) => {
     const elementWithId: CanvasElement = {
         ...newElement,
         id: `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
@@ -235,6 +443,20 @@ const App: React.FC = () => {
       height: 30,
       rotation,
       color: 'text-red-500',
+    });
+  }, [addElement]);
+
+  const addLabel = useCallback((position?: Point) => {
+    addElement({
+      type: 'label',
+      position: position || getRandomPosition(),
+      width: 220,
+      height: 72,
+      rotation: 0,
+      content: 'Label',
+      textColor: 'text-red-500',
+      backgroundColor: 'transparent',
+      fontSize: 24,
     });
   }, [addElement]);
   
@@ -374,20 +596,119 @@ const App: React.FC = () => {
     };
   }, [addImagesAtPosition, getCenterOfViewport, addIFrame, addElement]);
   
- const handleGenerate = useCallback(async (selectedElements: CanvasElement[]) => {
+  const isAbortError = (error: unknown) => {
+    return error instanceof DOMException && error.name === 'AbortError'
+      || typeof error === 'object' && error !== null && (error as any).name === 'AbortError';
+  };
+
+  const handleCancelGeneration = useCallback((taskId: string) => {
+    generationControllersRef.current.get(taskId)?.abort();
+    generationControllersRef.current.delete(taskId);
+    setGenerationItems(prev => prev.filter(item => item.id !== taskId));
+  }, []);
+
+ const handleGenerate = useCallback(async (
+      selectedElements: CanvasElement[],
+      workflowTarget?: { groupId: string; outputElementId: string }
+    ) => {
       const imageElements = selectedElements.filter(el => el.type === 'image' || el.type === 'drawing') as (ImageElement | DrawingElement)[];
+      const annotationElements = selectedElements.filter(el => el.type === 'image' || el.type === 'drawing' || el.type === 'arrow' || el.type === 'label');
       const noteElements = selectedElements.filter(el => el.type === 'note') as NoteElement[];
       const activeIframeElements = elements.filter(el => el.type === 'iframe' && el.isActivated) as IFrameElement[];
 
-      if (imageElements.length === 0 && noteElements.length === 0 && activeIframeElements.length === 0) {
+      if (annotationElements.length === 0 && noteElements.length === 0 && activeIframeElements.length === 0) {
           alert("Please select at least one element or activate a web page to provide context for generation.");
           return;
       }
 
-      setIsGenerating(true);
+      if (apiProvider === 'openai-custom' && !openaiKey) {
+          alert("OpenAI API key not available.");
+          return;
+      }
+
+      const geminiApiKey = apiProvider === 'gemini-custom' ? customGeminiKey : process.env.API_KEY;
+      if (apiProvider !== 'openai-custom' && !geminiApiKey) {
+          alert("Gemini API key not available.");
+          return;
+      }
+
+      const taskId = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+      const controller = new AbortController();
+      const { signal } = controller;
+      generationControllersRef.current.set(taskId, controller);
+      if (workflowTarget) {
+        setWorkflowGroups(prev => prev.map(group => group.id === workflowTarget.groupId ? {
+          ...group,
+          status: 'generating',
+          error: undefined,
+        } : group));
+        setElements(prev => prev.map(el => el.id === workflowTarget.outputElementId && el.type === 'image' ? {
+          ...el,
+          workflowStatus: 'generating',
+        } : el), { addToHistory: false });
+      } else {
+        setGenerationItems(prev => [
+          ...prev,
+          {
+            id: taskId,
+            status: 'generating',
+            images: [],
+            requestedCount: imageCount,
+            createdAt: Date.now(),
+          },
+        ]);
+      }
+
+      const completeGeneration = (validImages: string[]) => {
+        if (workflowTarget) {
+          const firstImage = validImages[0];
+          setElements(prev => prev.map(el => el.id === workflowTarget.outputElementId && el.type === 'image' ? {
+            ...el,
+            src: firstImage,
+            workflowStatus: 'completed',
+          } : el), { addToHistory: true });
+          setWorkflowGroups(prev => prev.map(group => group.id === workflowTarget.groupId ? {
+            ...group,
+            status: 'completed',
+            error: validImages.length < imageCount ? 'Some images failed to generate.' : undefined,
+          } : group));
+          return;
+        }
+
+        setGenerationItems(prev => prev.map(item => item.id === taskId ? {
+          ...item,
+          status: 'completed',
+          images: validImages,
+          error: validImages.length < imageCount ? 'Some images failed to generate.' : undefined,
+        } : item));
+      };
+
+      const failGeneration = (message: string) => {
+        if (workflowTarget) {
+          setElements(prev => prev.map(el => el.id === workflowTarget.outputElementId && el.type === 'image' ? {
+            ...el,
+            workflowStatus: 'failed',
+          } : el), { addToHistory: false });
+          setWorkflowGroups(prev => prev.map(group => group.id === workflowTarget.groupId ? {
+            ...group,
+            status: 'failed',
+            error: message,
+          } : group));
+          return;
+        }
+
+        setGenerationItems(prev => prev.map(item => item.id === taskId ? {
+          ...item,
+          status: 'failed',
+          error: message,
+        } : item));
+      };
 
       try {
         let instructions = noteElements.map(note => note.content).join(' \n');
+        const annotationAttachment = await createAnnotationAttachment(selectedElements);
+        if (signal.aborted) return;
+        setLastAnnotationPreview(annotationAttachment);
 
         if (activeIframeElements.length > 0) {
             const iframeContext = activeIframeElements.map(iframe => 
@@ -397,16 +718,10 @@ const App: React.FC = () => {
         }
 
         if (apiProvider === 'openai-custom') {
-            if (!openaiKey) {
-                alert("OpenAI API key not available.");
-                setIsGenerating(false);
-                return;
-            }
-
             const messages: any[] = [];
-            if (imageElements.length > 0) {
+            if (imageElements.length > 0 || annotationAttachment) {
                 const content: any[] = [
-                    { type: "text", text: `Using the provided image(s) as a base, follow these instructions: "${instructions}". If no specific instructions are given, creatively reimagine and enhance the image(s).` }
+                    { type: "text", text: `Using the clean source image(s) plus the annotated reference image, follow these instructions: "${instructions}". The annotated reference may contain arrows or visual text labels that indicate what area to edit; do not treat those markings as part of the desired final image unless the instructions explicitly say to keep them.` }
                 ];
                 imageElements.filter(el => el.src).forEach(el => {
                     content.push({
@@ -414,6 +729,12 @@ const App: React.FC = () => {
                         image_url: { url: el.src }
                     });
                 });
+                if (annotationAttachment) {
+                    content.push({
+                        type: "image_url",
+                        image_url: { url: annotationAttachment }
+                    });
+                }
                 messages.push({ role: "user", content });
             } else {
                 messages.push({ role: "user", content: `Generate a completely new image based on this description: "${instructions}"` });
@@ -431,6 +752,7 @@ const App: React.FC = () => {
                         'Authorization': `Bearer ${openaiKey}`,
                         ...(openaiStream ? { 'Accept': 'text/event-stream' } : {})
                     },
+                    signal,
                     body: JSON.stringify({
                         model: openaiModel,
                         messages: messages,
@@ -442,6 +764,7 @@ const App: React.FC = () => {
                 if (!response.ok) {
                     throw new Error(`OpenAI API error: ${response.statusText}`);
                 }
+                if (signal.aborted) return null;
 
                 const formatBase64 = (b64: string) => b64.startsWith('data:') ? b64 : `data:image/jpeg;base64,${b64}`;
 
@@ -453,6 +776,7 @@ const App: React.FC = () => {
                         let done = false;
                         let buffer = "";
                         while (!done) {
+                            if (signal.aborted) return null;
                             const { value, done: readerDone } = await reader.read();
                             done = readerDone;
                             if (value) {
@@ -494,6 +818,7 @@ const App: React.FC = () => {
                 }
 
                 const data = await response.json();
+                if (signal.aborted) return null;
 
                 // 1. Check data.data[0].b64_json
                 if (data.data?.[0]?.b64_json) {
@@ -534,41 +859,45 @@ const App: React.FC = () => {
                 return null;
             };
 
-            const promises = Array.from({ length: imageCount }, () => generateSingleImageOpenAI());
-            const images = await Promise.all(promises);
-            const validImages = images.filter((img): img is string => img !== null);
+            const results = await Promise.allSettled(Array.from({ length: imageCount }, () => generateSingleImageOpenAI()));
+            if (signal.aborted) return;
+            const validImages = results
+                .filter((result): result is PromiseFulfilledResult<string | null> => result.status === 'fulfilled')
+                .map(result => result.value)
+                .filter((img): img is string => img !== null);
             if (validImages.length > 0) {
-                setGenerationHistory(prev => [...validImages, ...prev]);
+                completeGeneration(validImages);
             } else {
-                alert("Failed to parse image URL from OpenAI response.");
+                throw new Error("Failed to parse image URL from OpenAI response.");
             }
 
         } else {
             // Default or Custom Gemini
-            const apiKey = apiProvider === 'gemini-custom' ? customGeminiKey : process.env.API_KEY;
-            if (!apiKey) {
-                alert("Gemini API key not available.");
-                setIsGenerating(false);
-                return;
-            }
-            const genAI = new GoogleGenAI({ apiKey });
+            const genAI = new GoogleGenAI({ apiKey: geminiApiKey as string });
 
             const commonConfig = {
                 responseModalities: [Modality.IMAGE, Modality.TEXT],
                 imageConfig: {
                     aspectRatio: aspectRatio,
                     imageSize: imageResolution
-                }
+                },
+                abortSignal: signal,
             };
 
-            if (imageElements.length > 0) { // Editing/Reimagining with existing images
+            if (imageElements.length > 0 || annotationAttachment) { // Editing/Reimagining with existing images
                 const imageParts = imageElements.filter(el => el.src).map(el => {
                     const [header, data] = el.src.split(',');
                     const mimeType = header.match(/data:(.*);base64/)?.[1] || 'image/png';
                     return { inlineData: { data, mimeType } };
                 });
 
-                const promptText = `Using the provided image(s) as a base, follow these instructions: "${instructions}". If no specific instructions are given, creatively reimagine and enhance the image(s).`;
+                if (annotationAttachment) {
+                    const [header, data] = annotationAttachment.split(',');
+                    const mimeType = header.match(/data:(.*);base64/)?.[1] || 'image/png';
+                    imageParts.push({ inlineData: { data, mimeType } });
+                }
+
+                const promptText = `Using the clean source image(s) plus the annotated reference image, follow these instructions: "${instructions}". The annotated reference may contain arrows or visual text labels that indicate what area to edit; do not treat those markings as part of the desired final image unless the instructions explicitly say to keep them.`;
                 const parts = [...imageParts, { text: promptText }];
                 
                 const generateSingleImage = async () => {
@@ -577,7 +906,8 @@ const App: React.FC = () => {
                       contents: { parts },
                       config: commonConfig,
                   });
-                  for (const part of response.candidates[0].content.parts) {
+                  if (signal.aborted) return null;
+                  for (const part of response.candidates?.[0]?.content?.parts || []) {
                       if (part.inlineData) {
                           return `data:image/png;base64,${part.inlineData.data}`;
                       }
@@ -585,11 +915,16 @@ const App: React.FC = () => {
                   return null;
                 };
 
-                const promises = Array.from({ length: imageCount }, () => generateSingleImage());
-                const images = await Promise.all(promises);
-                const validImages = images.filter((img): img is string => img !== null);
+                const results = await Promise.allSettled(Array.from({ length: imageCount }, () => generateSingleImage()));
+                if (signal.aborted) return;
+                const validImages = results
+                    .filter((result): result is PromiseFulfilledResult<string | null> => result.status === 'fulfilled')
+                    .map(result => result.value)
+                    .filter((img): img is string => img !== null);
                 if (validImages.length > 0) {
-                    setGenerationHistory(prev => [...validImages, ...prev]);
+                    completeGeneration(validImages);
+                } else {
+                    throw new Error("Failed to parse image data from Gemini response.");
                 }
 
             } else { // Generating new image from text description
@@ -601,7 +936,8 @@ const App: React.FC = () => {
                         contents: { parts: [{ text: promptText }] },
                         config: commonConfig,
                     });
-                    for (const part of response.candidates[0].content.parts) {
+                    if (signal.aborted) return null;
+                    for (const part of response.candidates?.[0]?.content?.parts || []) {
                         if (part.inlineData) {
                             return `data:image/png;base64,${part.inlineData.data}`;
                         }
@@ -609,26 +945,134 @@ const App: React.FC = () => {
                     return null;
                 };
 
-                const promises = Array.from({ length: imageCount }, () => generateSingleImage());
-                const images = await Promise.all(promises);
-                const validImages = images.filter((img): img is string => img !== null);
+                const results = await Promise.allSettled(Array.from({ length: imageCount }, () => generateSingleImage()));
+                if (signal.aborted) return;
+                const validImages = results
+                    .filter((result): result is PromiseFulfilledResult<string | null> => result.status === 'fulfilled')
+                    .map(result => result.value)
+                    .filter((img): img is string => img !== null);
                 if (validImages.length > 0) {
-                    setGenerationHistory(prev => [...validImages, ...prev]);
+                    completeGeneration(validImages);
+                } else {
+                    throw new Error("Failed to parse image data from Gemini response.");
                 }
             }
         }
       } catch (error: any) {
+        if (isAbortError(error) || signal.aborted) {
+            return;
+        }
         console.error("Error generating image:", error);
         if (error?.message?.includes("Requested entity was not found.")) {
-            alert("Model access error. Please ensure you have a valid paid project API key selected.");
+            failGeneration("Model access error. Please ensure you have a valid paid project API key selected.");
             setHasProKey(false);
         } else {
-            alert("Failed to generate image. Please check the console for details.");
+            failGeneration(error?.message || "Failed to generate image.");
         }
       } finally {
-        setIsGenerating(false);
+        generationControllersRef.current.delete(taskId);
       }
-  }, [elements, selectedModel, aspectRatio, imageResolution, imageCount, apiProvider, customGeminiKey, openaiBaseUrl, openaiModel, openaiKey, openaiStream]);
+  }, [elements, selectedModel, aspectRatio, imageResolution, imageCount, apiProvider, customGeminiKey, openaiBaseUrl, openaiModel, openaiKey, openaiStream, setElements]);
+
+  const handleCreateGroup = useCallback((bounds: Bounds, inputElementIds: string[]) => {
+      const groupId = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+      const outputElementId = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+      const outputWidth = Math.max(96, Math.min(bounds.width * 0.5, 260));
+      const outputHeight = Math.max(72, Math.min(bounds.height * 0.5, 260));
+      const outputElement: ImageElement = {
+          id: outputElementId,
+          type: 'image',
+          position: {
+              x: bounds.x + bounds.width + 32 + outputWidth / 2,
+              y: bounds.y + bounds.height / 2,
+          },
+          width: outputWidth,
+          height: outputHeight,
+          rotation: 0,
+          zIndex: zIndexCounter.current++,
+          src: '',
+          isWorkflowOutput: true,
+          workflowGroupId: groupId,
+          workflowStatus: 'idle',
+      };
+
+      setElements(prev => [...prev, outputElement]);
+      setWorkflowGroups(prev => [
+          ...prev,
+          {
+              id: groupId,
+              bounds,
+              inputElementIds,
+              outputElementId,
+              status: 'idle',
+          },
+      ]);
+  }, [setElements]);
+
+  const handleUpdateGroupBounds = useCallback((groupId: string, bounds: Bounds, dragDelta?: Point) => {
+      const group = workflowGroups.find(item => item.id === groupId);
+      setWorkflowGroups(prev => prev.map(group => group.id === groupId ? { ...group, bounds } : group));
+      if (!group || !dragDelta) return;
+
+      setElements(prev => {
+          const inputIds = new Set(getElementsInBounds(prev, group.bounds, [group.outputElementId]).map(input => input.id));
+          return prev.map(el => {
+          if (!inputIds.has(el.id)) return el;
+          if (el.type === 'arrow') {
+              return {
+                  ...el,
+                  position: { x: el.position.x + dragDelta.x, y: el.position.y + dragDelta.y },
+                  start: { x: el.start.x + dragDelta.x, y: el.start.y + dragDelta.y },
+                  end: { x: el.end.x + dragDelta.x, y: el.end.y + dragDelta.y },
+              };
+          }
+          return {
+              ...el,
+              position: { x: el.position.x + dragDelta.x, y: el.position.y + dragDelta.y },
+          };
+          });
+      }, { addToHistory: false });
+  }, [workflowGroups, setElements]);
+
+  const handleUngroup = useCallback((groupId: string) => {
+      const group = workflowGroups.find(item => item.id === groupId);
+      setWorkflowGroups(prev => prev.filter(item => item.id !== groupId));
+      if (group) {
+          setElements(prev => prev.filter(el => el.id !== group.outputElementId));
+      }
+  }, [workflowGroups, setElements]);
+
+  const handleStartGroup = useCallback((groupId: string) => {
+      const group = workflowGroups.find(item => item.id === groupId);
+      if (!group || group.status === 'generating') return;
+
+      const inputElements = getElementsInBounds(elements, group.bounds, [group.outputElementId]);
+      const pendingInputs = inputElements.filter(el => el.type === 'image' && el.isWorkflowOutput && el.workflowStatus !== 'completed');
+      if (pendingInputs.length > 0) {
+          setWorkflowGroups(prev => prev.map(item => item.id === groupId ? { ...item, status: 'waiting' } : item));
+          return;
+      }
+
+      void handleGenerate(inputElements, {
+          groupId,
+          outputElementId: group.outputElementId,
+      });
+  }, [elements, workflowGroups, handleGenerate]);
+
+  useEffect(() => {
+      const readyGroupIds = workflowGroups
+          .filter(group => group.status === 'idle' || group.status === 'waiting')
+          .filter(group => {
+              const workflowInputs = getElementsInBounds(elements, group.bounds, [group.outputElementId])
+                  .filter((el): el is ImageElement => el.type === 'image' && !!el.isWorkflowOutput);
+
+              return workflowInputs.length > 0
+                  && workflowInputs.every(el => el.workflowStatus === 'completed' && !!el.src);
+          })
+          .map(group => group.id);
+
+      readyGroupIds.forEach(groupId => handleStartGroup(groupId));
+  }, [elements, workflowGroups, handleStartGroup]);
 
 
   const handleSelectElement = useCallback((id: string | null, shiftKey: boolean) => {
@@ -669,6 +1113,14 @@ const App: React.FC = () => {
             return updatedElement;
           }
           if (selectedSet.has(el.id)) {
+             if (el.type === 'arrow') {
+                return {
+                    ...el,
+                    position: { x: el.position.x + dragDelta.x, y: el.position.y + dragDelta.y },
+                    start: { x: el.start.x + dragDelta.x, y: el.start.y + dragDelta.y },
+                    end: { x: el.end.x + dragDelta.x, y: el.end.y + dragDelta.y },
+                };
+             }
              return { ...el, position: { x: el.position.x + dragDelta.x, y: el.position.y + dragDelta.y } };
           }
           return el;
@@ -699,6 +1151,8 @@ const App: React.FC = () => {
           if (elementsToTrash.length > 0) {
               setTrashedElements(prevTrashed => [...prevTrashed, ...elementsToTrash]);
               setSelectedElementIds([]);
+              const trashedSet = new Set(elementsToTrash.map(el => el.id));
+              setWorkflowGroups(prevGroups => prevGroups.filter(group => !trashedSet.has(group.outputElementId)));
           }
           return remainingElements;
       });
@@ -792,7 +1246,8 @@ const App: React.FC = () => {
   }, []);
 
   const selectedElements = elements.filter(el => selectedElementIds.includes(el.id));
-  const canChangeColor = selectedElements.some(el => el.type === 'note' || el.type === 'arrow');
+  const canChangeColor = selectedElements.some(el => el.type === 'note' || el.type === 'arrow' || el.type === 'label');
+  const canChangeLabelBackground = selectedElements.some(el => el.type === 'label');
 
   const handleColorChange = (newColor: string) => {
       if (!canChangeColor) return;
@@ -801,9 +1256,25 @@ const App: React.FC = () => {
           if (selectedSet.has(el.id)) {
               if (el.type === 'note') return { ...el, color: newColor };
               if (el.type === 'arrow') {
-                  const newTextColor = newColor.replace('bg-', 'text-');
-                  return { ...el, color: newTextColor };
+                const newTextColor = newColor.replace('bg-', 'text-');
+                return { ...el, color: newTextColor };
               }
+              if (el.type === 'label') {
+                  return {
+                      ...el,
+                      textColor: newColor.replace('bg-', 'text-'),
+                  };
+              }
+          }
+          return el;
+      }));
+  };
+
+  const handleLabelBackgroundChange = (newColor: string) => {
+      const selectedSet = new Set(selectedElementIds);
+      setElements(prev => prev.map(el => {
+          if (selectedSet.has(el.id) && el.type === 'label') {
+              return { ...el, backgroundColor: newColor };
           }
           return el;
       }));
@@ -838,8 +1309,14 @@ const App: React.FC = () => {
     img.src = src;
   }, [addElement, getCenterOfViewport]);
   
-  const handleDeleteGeneratedImage = (indexToDelete: number) => {
-      setGenerationHistory(prev => prev.filter((_, index) => index !== indexToDelete));
+  const handleDeleteGeneratedImage = (taskId: string, imageIndex: number) => {
+      setGenerationItems(prev => prev
+        .map(item => item.id === taskId ? {
+            ...item,
+            images: item.images.filter((_, index) => index !== imageIndex),
+        } : item)
+        .filter(item => item.status !== 'completed' || item.images.length > 0)
+      );
   };
 
   const downloadImage = useCallback((elementId: string) => {
@@ -1001,11 +1478,12 @@ const App: React.FC = () => {
         <div className="grid grid-cols-2 gap-2">
             <button onClick={() => addNote()} className="px-3 py-2 text-sm bg-blue-600 text-white rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-opacity-50 transition-colors">Add Note</button>
             <button onClick={() => addArrow()} className="px-3 py-2 text-sm bg-green-600 text-white rounded-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-opacity-50 transition-colors">Add Arrow</button>
+            <button onClick={() => addLabel()} className="px-3 py-2 text-sm bg-red-600 text-white rounded-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-opacity-50 transition-colors">Add Label</button>
             <button onClick={() => addDrawing()} className="px-3 py-2 text-sm bg-purple-600 text-white rounded-md hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-opacity-50 transition-colors">Add Drawing</button>
             <button onClick={() => {
                 const url = prompt("Enter a web page URL to embed:", "https://");
                 if (url) addIFrame(url);
-              }} className="px-3 py-2 text-sm bg-indigo-600 text-white rounded-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-opacity-50 transition-colors">Add Web Page</button>
+              }} className="px-3 py-2 text-sm bg-indigo-600 text-white rounded-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-opacity-50 transition-colors col-span-2">Add Web Page</button>
             <label className="cursor-pointer px-3 py-2 text-sm text-center bg-orange-500 text-white rounded-md hover:bg-orange-600 focus:outline-none focus:ring-2 focus:ring-orange-500 focus:ring-opacity-50 transition-colors col-span-2">
                 Add Image(s)
                 <input type="file" accept="image/*" ref={imageInputRef} className="hidden" onChange={handleImageUpload} multiple />
@@ -1017,7 +1495,6 @@ const App: React.FC = () => {
                 <h2 className="text-md font-semibold text-gray-700 mb-2">Color</h2>
                 <div className="grid grid-cols-8 gap-1.5">
                     {COLORS.map(color => {
-                        const isNoteSelected = selectedElements.some(el => el.type === 'note');
                         const finalColor = color.bg;
                         return (
                             <button
@@ -1029,6 +1506,26 @@ const App: React.FC = () => {
                         )
                     })}
                 </div>
+                {canChangeLabelBackground && (
+                    <div className="mt-3">
+                        <h3 className="text-xs font-semibold text-gray-600 mb-2">Label Background</h3>
+                        <div className="grid grid-cols-8 gap-1.5">
+                            <button
+                                onClick={() => handleLabelBackgroundChange('transparent')}
+                                className="w-6 h-6 rounded-full border-2 border-dashed border-gray-400 bg-white"
+                                aria-label="Set label background to transparent"
+                            />
+                            {COLORS.map(color => (
+                                <button
+                                    key={color.name}
+                                    onClick={() => handleLabelBackgroundChange(color.bg)}
+                                    className={`w-6 h-6 rounded-full border-2 ${color.bg} border-white`}
+                                    aria-label={`Set label background to ${color.name}`}
+                                />
+                            ))}
+                        </div>
+                    </div>
+                )}
             </div>
         )}
 
@@ -1061,10 +1558,11 @@ const App: React.FC = () => {
       </div>
 
       <GenerationPanel
-          isGenerating={isGenerating}
-          images={generationHistory}
+          generationItems={generationItems}
+          annotationPreview={lastAnnotationPreview}
           onAddToCanvas={addGeneratedImageToCanvas}
           onDelete={handleDeleteGeneratedImage}
+          onCancelTask={handleCancelGeneration}
       />
       
       <InfiniteCanvas 
@@ -1077,6 +1575,11 @@ const App: React.FC = () => {
         onInteractionEnd={handleInteractionEnd}
         setResetViewCallback={getResetViewCallback} 
         onGenerate={handleGenerate}
+        workflowGroups={workflowGroups}
+        onCreateGroup={handleCreateGroup}
+        onStartGroup={handleStartGroup}
+        onUngroup={handleUngroup}
+        onUpdateGroupBounds={handleUpdateGroupBounds}
         onContextMenu={handleContextMenu}
         onEditDrawing={handleEditDrawing}
         onImageDrop={handleImageDrop}
@@ -1100,6 +1603,7 @@ const App: React.FC = () => {
           actions={{
             addNote,
             addArrow,
+            addLabel,
             addDrawing,
             editDrawing: handleEditDrawing,
             addImage: triggerImageUpload,

@@ -180,8 +180,8 @@ export const TransformableElement: React.FC<TransformableElementProps> = ({ elem
         setInteraction(null);
     }, [interaction, onInteractionEnd]);
 
-    const handleDoubleClick = useCallback((e: React.MouseEvent) => {
-        if (element.type === 'note') {
+  const handleDoubleClick = useCallback((e: React.MouseEvent) => {
+        if (element.type === 'note' || element.type === 'label') {
             e.stopPropagation();
             setIsEditing(true);
             setTimeout(() => {
@@ -295,7 +295,64 @@ export const TransformableElement: React.FC<TransformableElementProps> = ({ elem
                                 />
                             </div>
                         );
+                    case 'label':
+                        return (
+                            <div
+                                style={style}
+                                className={`rounded-md font-semibold flex items-center justify-center ${el.backgroundColor === 'transparent' ? '' : el.backgroundColor}`}
+                            >
+                                <textarea
+                                    ref={textareaRef}
+                                    value={el.content}
+                                    readOnly={!isEditing}
+                                    onChange={(e) => onUpdate({ ...el, content: e.target.value })}
+                                    onBlur={() => setIsEditing(false)}
+                                    onMouseDown={(e) => {
+                                      if (e.button !== 0) return;
+                                      onSelect(element.id, e.shiftKey);
+                                      if (isEditing) {
+                                        e.stopPropagation();
+                                      }
+                                    }}
+                                    className={`w-full h-full bg-transparent text-center p-2 resize-none border-none focus:outline-none ${el.textColor} ${isEditing ? 'cursor-text' : 'cursor-move'}`}
+                                    style={{ fontFamily: 'inherit', fontSize: el.fontSize, lineHeight: 1.25 }}
+                                    placeholder="Label..."
+                                />
+                            </div>
+                        );
                     case 'image':
+                        if (el.isWorkflowOutput) {
+                            const status = el.workflowStatus || (el.src ? 'completed' : 'idle');
+                            const statusClass = status === 'completed'
+                                ? 'bg-green-500'
+                                : status === 'generating'
+                                    ? 'bg-yellow-400 animate-pulse'
+                                    : status === 'failed'
+                                        ? 'bg-red-500'
+                                        : 'bg-gray-400';
+                            const label = status === 'completed'
+                                ? 'Generated'
+                                : status === 'generating'
+                                    ? 'Generating'
+                                    : status === 'failed'
+                                        ? 'Failed'
+                                        : 'Ready';
+
+                            return (
+                                <div style={style} className="relative shadow-lg rounded-md overflow-visible bg-white border border-gray-200">
+                                    <div className={`absolute -top-7 left-0 right-0 h-5 rounded-t-md text-[11px] font-semibold text-white flex items-center justify-center ${statusClass}`}>
+                                        {label}
+                                    </div>
+                                    {el.src ? (
+                                        <img src={el.src} alt="Workflow output" className="w-full h-full rounded-md object-cover" draggable="false" />
+                                    ) : (
+                                        <div className="w-full h-full rounded-md border-2 border-dashed border-gray-300 bg-gray-50 flex items-center justify-center text-xs font-medium text-gray-400">
+                                            Output
+                                        </div>
+                                    )}
+                                </div>
+                            );
+                        }
                         return (
                             <img src={el.src} alt="User upload" style={style} className="shadow-lg rounded-md object-cover" draggable="false" />
                         );

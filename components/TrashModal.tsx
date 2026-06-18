@@ -17,6 +17,12 @@ const ElementPreview: React.FC<ElementPreviewProps> = ({ element, isSelected, on
         switch (element.type) {
             case 'note':
                 return <div className={`w-full h-full rounded-md ${element.color} p-2 text-white text-xs overflow-hidden text-ellipsis`}>{element.content}</div>;
+            case 'label':
+                return (
+                    <div className={`w-full h-full rounded-md p-2 text-xs overflow-hidden text-ellipsis ${element.backgroundColor === 'transparent' ? 'bg-white/40' : element.backgroundColor}`}>
+                        <span className={element.textColor}>{element.content}</span>
+                    </div>
+                );
             case 'image':
             case 'drawing':
                 return <img src={element.src} alt={element.type} className="max-w-full max-h-full object-contain" />;
