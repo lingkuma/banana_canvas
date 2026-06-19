@@ -19,18 +19,23 @@ type InteractionType = 'drag' | 'rotate' | 'resize-arrow-start' | 'resize-arrow-
 
 type Interaction = {
   type: InteractionType;
+  pointerId: number;
+  pointerType: string;
   startPoint: Point;
   startElement: CanvasElement;
   startAngle?: number;
   center?: Point;
 } | null;
 
+const TAP_MOVE_THRESHOLD = 8;
+const DOUBLE_TAP_DELAY = 320;
+
 const getResizeHandleStyle = (handle: string): React.CSSProperties => {
-  const style: React.CSSProperties = { width: 12, height: 12, zIndex: 10 };
-  if (handle.includes('n')) style.top = -6;
-  if (handle.includes('s')) style.bottom = -6;
-  if (handle.includes('w')) style.left = -6;
-  if (handle.includes('e')) style.right = -6;
+  const style: React.CSSProperties = { width: 18, height: 18, zIndex: 10 };
+  if (handle.includes('n')) style.top = -9;
+  if (handle.includes('s')) style.bottom = -9;
+  if (handle.includes('w')) style.left = -9;
+  if (handle.includes('e')) style.right = -9;
   if (handle === 'n' || handle === 's') { style.left = '50%'; style.transform = 'translateX(-50%)'; }
   if (handle === 'w' || handle === 'e') { style.top = '50%'; style.transform = 'translateY(-50%)'; }
   return style;
@@ -53,6 +58,7 @@ export const TransformableElement: React.FC<TransformableElementProps> = ({ elem
   const [copied, setCopied] = useState(false);
   const elementRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const lastTouchTapRef = useRef<{ time: number; point: Point } | null>(null);
 
   useEffect(() => {
     if (!isSelected) {
@@ -60,13 +66,21 @@ export const TransformableElement: React.FC<TransformableElementProps> = ({ elem
     }
   }, [isSelected]);
 
-  const handleInteractionStart = useCallback((e: React.MouseEvent, type: InteractionType) => {
-      if (e.button !== 0) return; // Ignore right/middle clicks
+  const handleInteractionStart = useCallback((e: React.PointerEvent, type: InteractionType) => {
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
       e.stopPropagation();
+      e.preventDefault();
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
       onSelect(element.id, e.shiftKey);
 
       const startPoint = { x: e.clientX, y: e.clientY };
-      let interactionDetails: Interaction = { type, startPoint, startElement: element };
+      let interactionDetails: Interaction = {
+        type,
+        pointerId: e.pointerId,
+        pointerType: e.pointerType,
+        startPoint,
+        startElement: element,
+      };
 
       if (type === 'rotate' && elementRef.current) {
           const rect = elementRef.current.getBoundingClientRect();
@@ -80,8 +94,8 @@ export const TransformableElement: React.FC<TransformableElementProps> = ({ elem
 
     }, [element, onSelect]);
     
-    const handleInteractionMove = useCallback((e: MouseEvent) => {
-        if (!interaction) return;
+    const handleInteractionMove = useCallback((e: PointerEvent) => {
+        if (!interaction || e.pointerId !== interaction.pointerId) return;
 
         const { type, startPoint, startElement } = interaction;
         const dx = (e.clientX - startPoint.x) / zoom;
@@ -173,12 +187,36 @@ export const TransformableElement: React.FC<TransformableElementProps> = ({ elem
         }
     }, [interaction, onUpdate, zoom, element.position.x, element.position.y, element.type]);
 
-    const handleInteractionEnd = useCallback(() => {
-        if (interaction) {
-          onInteractionEnd();
+    const handleInteractionEnd = useCallback((e?: PointerEvent) => {
+        if (!interaction) return;
+        if (e && e.pointerId !== interaction.pointerId) return;
+
+        if (interaction.pointerType !== 'mouse' && interaction.type === 'drag' && e) {
+            const endPoint = { x: e.clientX, y: e.clientY };
+            const moved = Math.hypot(endPoint.x - interaction.startPoint.x, endPoint.y - interaction.startPoint.y);
+            if (moved <= TAP_MOVE_THRESHOLD) {
+                const now = Date.now();
+                const lastTap = lastTouchTapRef.current;
+                if (lastTap && now - lastTap.time <= DOUBLE_TAP_DELAY && Math.hypot(lastTap.point.x - endPoint.x, lastTap.point.y - endPoint.y) <= 30) {
+                    if (interaction.startElement.type === 'note' || interaction.startElement.type === 'label') {
+                        setIsEditing(true);
+                        setTimeout(() => {
+                            textareaRef.current?.focus();
+                            textareaRef.current?.select();
+                        }, 0);
+                    } else if (interaction.startElement.type === 'drawing') {
+                        onEditDrawing(interaction.startElement.id);
+                    }
+                    lastTouchTapRef.current = null;
+                } else {
+                    lastTouchTapRef.current = { time: now, point: endPoint };
+                }
+            }
         }
+
+        onInteractionEnd();
         setInteraction(null);
-    }, [interaction, onInteractionEnd]);
+    }, [interaction, onEditDrawing, onInteractionEnd]);
 
   const handleDoubleClick = useCallback((e: React.MouseEvent) => {
         if (element.type === 'note' || element.type === 'label') {
@@ -201,12 +239,14 @@ export const TransformableElement: React.FC<TransformableElementProps> = ({ elem
 
     useEffect(() => {
         if (interaction) {
-            window.addEventListener('mousemove', handleInteractionMove);
-            window.addEventListener('mouseup', handleInteractionEnd);
+            window.addEventListener('pointermove', handleInteractionMove);
+            window.addEventListener('pointerup', handleInteractionEnd);
+            window.addEventListener('pointercancel', handleInteractionEnd);
         }
         return () => {
-            window.removeEventListener('mousemove', handleInteractionMove);
-            window.removeEventListener('mouseup', handleInteractionEnd);
+            window.removeEventListener('pointermove', handleInteractionMove);
+            window.removeEventListener('pointerup', handleInteractionEnd);
+            window.removeEventListener('pointercancel', handleInteractionEnd);
         };
     }, [interaction, handleInteractionMove, handleInteractionEnd]);
     
@@ -250,7 +290,7 @@ export const TransformableElement: React.FC<TransformableElementProps> = ({ elem
     return (
         <div
             ref={elementRef}
-            className="absolute"
+            className="absolute [touch-action:none]"
             style={{
                 left: element.position.x,
                 top: element.position.y,
@@ -260,7 +300,7 @@ export const TransformableElement: React.FC<TransformableElementProps> = ({ elem
                 cursor: 'move',
                 zIndex: element.zIndex
             }}
-            onMouseDown={(e) => handleInteractionStart(e, 'drag')}
+            onPointerDown={(e) => handleInteractionStart(e, 'drag')}
             onDoubleClick={handleDoubleClick}
             onContextMenu={handleContextMenu}
         >
@@ -282,8 +322,8 @@ export const TransformableElement: React.FC<TransformableElementProps> = ({ elem
                                     readOnly={!isEditing}
                                     onChange={(e) => onUpdate({ ...el, content: e.target.value })}
                                     onBlur={() => setIsEditing(false)}
-                                    onMouseDown={(e) => {
-                                      if (e.button !== 0) return;
+                                    onPointerDown={(e) => {
+                                      if (e.pointerType === 'mouse' && e.button !== 0) return;
                                       onSelect(element.id, e.shiftKey);
                                       if (isEditing) {
                                         e.stopPropagation();
@@ -307,8 +347,8 @@ export const TransformableElement: React.FC<TransformableElementProps> = ({ elem
                                     readOnly={!isEditing}
                                     onChange={(e) => onUpdate({ ...el, content: e.target.value })}
                                     onBlur={() => setIsEditing(false)}
-                                    onMouseDown={(e) => {
-                                      if (e.button !== 0) return;
+                                    onPointerDown={(e) => {
+                                      if (e.pointerType === 'mouse' && e.button !== 0) return;
                                       onSelect(element.id, e.shiftKey);
                                       if (isEditing) {
                                         e.stopPropagation();
@@ -369,7 +409,7 @@ export const TransformableElement: React.FC<TransformableElementProps> = ({ elem
                     case 'iframe':
                         return (
                             <div style={style} className="shadow-lg rounded-md bg-gray-200 flex flex-col overflow-hidden">
-                                <div onMouseDown={(e) => { e.stopPropagation(); handleInteractionStart(e, 'drag'); }} className="bg-gray-700 text-white py-1 px-2 rounded-t-md flex items-center gap-2 text-xs cursor-move flex-shrink-0">
+                                <div onPointerDown={(e) => { e.stopPropagation(); handleInteractionStart(e, 'drag'); }} className="bg-gray-700 text-white py-1 px-2 rounded-t-md flex items-center gap-2 text-xs cursor-move flex-shrink-0">
                                     <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="currentColor" className="opacity-50" viewBox="0 0 16 16"><path d="M16 8.049c0-4.446-3.582-8.05-8-8.05C3.58 0-.002 3.603-.002 8.05c0 4.017 2.926 7.347 6.75 7.951v-5.625h-2.03V8.05H6.75V6.275c0-2.017 1.195-3.131 3.022-3.131.876 0 1.791.157 1.791.157v1.98h-1.009c-.993 0-1.303.621-1.303 1.258v1.51h2.218l-.354 2.326H9.25V16c3.824-.604 6.75-3.934 6.75-7.951"/></svg>
                                     <span className="truncate flex-grow">{el.url}</span>
                                     <button
@@ -455,14 +495,14 @@ export const TransformableElement: React.FC<TransformableElementProps> = ({ elem
                     {element.type === 'arrow' ? (
                         <>
                             <div className="absolute top-1/2 -left-2 -translate-y-1/2 w-4 h-4 bg-white border-2 border-blue-500 rounded-full cursor-grab transform-handle"
-                                onMouseDown={(e) => handleInteractionStart(e, 'resize-arrow-start')} />
+                                onPointerDown={(e) => handleInteractionStart(e, 'resize-arrow-start')} />
                             <div className="absolute top-1/2 -right-2 -translate-y-1/2 w-4 h-4 bg-white border-2 border-blue-500 rounded-full cursor-grab transform-handle"
-                                onMouseDown={(e) => handleInteractionStart(e, 'resize-arrow-end')} />
+                                onPointerDown={(e) => handleInteractionStart(e, 'resize-arrow-end')} />
                         </>
                     ) : (
                         <>
                             <div className="absolute -top-8 left-1/2 -translate-x-1/2 w-5 h-5 bg-blue-500 rounded-full cursor-alias transform-handle"
-                                onMouseDown={(e) => handleInteractionStart(e, 'rotate')} />
+                                onPointerDown={(e) => handleInteractionStart(e, 'rotate')} />
                             <div className="absolute -top-3 left-1/2 -translate-x-1/2 w-0.5 h-3 bg-blue-500 pointer-events-none" />
 
                             {['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'].map(handle => (
@@ -470,7 +510,7 @@ export const TransformableElement: React.FC<TransformableElementProps> = ({ elem
                                     key={handle}
                                     className={`absolute bg-white border-2 border-blue-500 transform-handle ${getResizeHandleCursor(handle)}`}
                                     style={getResizeHandleStyle(handle)}
-                                    onMouseDown={(e) => handleInteractionStart(e, `resize-${handle}` as InteractionType)}
+                                    onPointerDown={(e) => handleInteractionStart(e, `resize-${handle}` as InteractionType)}
                                 />
                             ))}
                         </>

@@ -124,7 +124,7 @@ export const DrawingModal: React.FC<DrawingModalProps> = ({ element, onSave, onC
     }, [undo, redo]);
 
 
-  const getCanvasPoint = useCallback((e: React.MouseEvent): Point | null => {
+  const getCanvasPoint = useCallback((e: React.PointerEvent | PointerEvent): Point | null => {
     const canvas = canvasRef.current;
     if (!canvas) return null;
     const rect = canvas.getBoundingClientRect();
@@ -136,7 +136,9 @@ export const DrawingModal: React.FC<DrawingModalProps> = ({ element, onSave, onC
     };
   }, []);
 
-  const startDrawing = useCallback((e: React.MouseEvent) => {
+  const startDrawing = useCallback((e: React.PointerEvent) => {
+    e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
     const point = getCanvasPoint(e);
     const context = contextRef.current;
     if (!point || !context) return;
@@ -157,8 +159,9 @@ export const DrawingModal: React.FC<DrawingModalProps> = ({ element, onSave, onC
     }
   }, [isDrawing, saveHistoryState]);
 
-  const draw = useCallback((e: React.MouseEvent) => {
+  const draw = useCallback((e: React.PointerEvent) => {
     if (!isDrawing) return;
+    e.preventDefault();
     const point = getCanvasPoint(e);
     const context = contextRef.current;
     if (!point || !context) return;
@@ -237,11 +240,12 @@ export const DrawingModal: React.FC<DrawingModalProps> = ({ element, onSave, onC
         <div className="flex-grow p-4 bg-gray-200 flex items-center justify-center overflow-auto">
             <canvas
                 ref={canvasRef}
-                onMouseDown={startDrawing}
-                onMouseUp={finishDrawing}
-                onMouseLeave={finishDrawing}
-                onMouseMove={draw}
-                className="bg-white shadow-lg cursor-crosshair max-w-full max-h-full"
+                onPointerDown={startDrawing}
+                onPointerUp={finishDrawing}
+                onPointerCancel={finishDrawing}
+                onPointerLeave={finishDrawing}
+                onPointerMove={draw}
+                className="bg-white shadow-lg cursor-crosshair max-w-full max-h-full [touch-action:none]"
             />
         </div>
 

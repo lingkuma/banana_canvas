@@ -45,6 +45,7 @@ type GroupInteractionType = 'move' | 'resize-nw' | 'resize-n' | 'resize-ne' | 'r
 type GroupInteraction = {
   type: GroupInteractionType;
   groupId: string;
+  pointerId: number;
   lastPoint: Point;
   currentBounds: Bounds;
 } | null;
@@ -57,6 +58,8 @@ const MIN_ZOOM = 0.1;
 const MAX_ZOOM = 5;
 const MIN_GROUP_WIDTH = 80;
 const MIN_GROUP_HEIGHT = 60;
+const TAP_MOVE_THRESHOLD = 8;
+const DOUBLE_TAP_DELAY = 320;
 
 const resizeGroupBounds = (bounds: Bounds, type: GroupInteractionType, dx: number, dy: number): Bounds => {
   const handle = type.replace('resize-', '');
@@ -94,11 +97,11 @@ const resizeGroupBounds = (bounds: Bounds, type: GroupInteractionType, dx: numbe
 };
 
 const getGroupResizeHandleStyle = (handle: string): React.CSSProperties => {
-  const style: React.CSSProperties = { width: 10, height: 10 };
-  if (handle.includes('n')) style.top = -5;
-  if (handle.includes('s')) style.bottom = -5;
-  if (handle.includes('w')) style.left = -5;
-  if (handle.includes('e')) style.right = -5;
+  const style: React.CSSProperties = { width: 16, height: 16 };
+  if (handle.includes('n')) style.top = -8;
+  if (handle.includes('s')) style.bottom = -8;
+  if (handle.includes('w')) style.left = -8;
+  if (handle.includes('e')) style.right = -8;
   if (handle === 'n' || handle === 's') { style.left = '50%'; style.transform = 'translateX(-50%)'; }
   if (handle === 'w' || handle === 'e') { style.top = '50%'; style.transform = 'translateY(-50%)'; }
   return style;
@@ -157,6 +160,15 @@ export const InfiniteCanvas = forwardRef<CanvasApi, InfiniteCanvasProps>(({
 
   const canvasRef = useRef<HTMLDivElement>(null);
   const groupInteractionRef = useRef<GroupInteraction>(null);
+  const activePointersRef = useRef<Map<number, Point>>(new Map());
+  const canvasPointerModeRef = useRef<'mouse-pan' | 'mouse-marquee' | 'touch-pan' | null>(null);
+  const touchStartPointRef = useRef<Point | null>(null);
+  const lastTouchTapRef = useRef<{ time: number; point: Point } | null>(null);
+  const pinchGestureRef = useRef<{
+    startDistance: number;
+    startZoom: number;
+    worldAtMidpoint: Point;
+  } | null>(null);
   
   const screenToWorld = useCallback((screenPoint: Point): Point => {
     return {
@@ -193,24 +205,108 @@ export const InfiniteCanvas = forwardRef<CanvasApi, InfiniteCanvasProps>(({
     };
   }, []);
 
-  const handleMouseDown = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+  const getPointerDistance = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y);
+  const getPointerMidpoint = (a: Point, b: Point): Point => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+
+  const beginPinchGesture = useCallback(() => {
+    const points = Array.from(activePointersRef.current.values());
+    if (points.length < 2) return;
+    const [first, second] = points;
+    const midpoint = getPointerMidpoint(first, second);
+    pinchGestureRef.current = {
+      startDistance: Math.max(1, getPointerDistance(first, second)),
+      startZoom: zoom,
+      worldAtMidpoint: screenToWorld(midpoint),
+    };
+  }, [screenToWorld, zoom]);
+
+  const handlePointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if ((e.target as HTMLElement).closest('.transform-handle, .element-body, .generate-btn, .workflow-group')) return;
+    canvasRef.current?.setPointerCapture(e.pointerId);
+
+    if (e.pointerType !== 'mouse') {
+      e.preventDefault();
+      const point = { x: e.clientX, y: e.clientY };
+      activePointersRef.current.set(e.pointerId, point);
+
+      if (activePointersRef.current.size >= 2) {
+        setIsPanning(false);
+        setMarqueeRect(null);
+        canvasPointerModeRef.current = null;
+        beginPinchGesture();
+        return;
+      }
+
+      onSelectElement(null, e.shiftKey);
+      setSelectionBounds(null);
+      touchStartPointRef.current = point;
+      canvasPointerModeRef.current = 'touch-pan';
+      setIsPanning(true);
+      setStartPan({ x: e.clientX - pan.x, y: e.clientY - pan.y });
+      return;
+    }
 
     const isPanTrigger = isSpacebarPressed || e.button === 1;
 
     if (isPanTrigger) {
         e.preventDefault();
+        canvasPointerModeRef.current = 'mouse-pan';
         setIsPanning(true);
         setStartPan({ x: e.clientX - pan.x, y: e.clientY - pan.y });
-    } else if (e.button === 0) { // Only start marquee on left click
+    } else if (e.button === 0) {
+        canvasPointerModeRef.current = 'mouse-marquee';
         onSelectElement(null, e.shiftKey);
         if (!e.shiftKey) setSelectionBounds(null);
         setMarqueeRect({ start: { x: e.clientX, y: e.clientY }, end: { x: e.clientX, y: e.clientY } });
     }
-  }, [isSpacebarPressed, pan, onSelectElement]);
+  }, [beginPinchGesture, isSpacebarPressed, onSelectElement, pan]);
 
-  const handleMouseUp = useCallback((e: React.MouseEvent) => {
+  const handlePointerUp = useCallback((e: React.PointerEvent) => {
+    if (e.pointerType !== 'mouse') {
+      const point = { x: e.clientX, y: e.clientY };
+      const touchStartPoint = touchStartPointRef.current;
+      const wasTap = activePointersRef.current.size === 1
+        && canvasPointerModeRef.current === 'touch-pan'
+        && touchStartPoint
+        && getPointerDistance(touchStartPoint, point) <= TAP_MOVE_THRESHOLD;
+
+      activePointersRef.current.delete(e.pointerId);
+      if (canvasRef.current?.hasPointerCapture(e.pointerId)) {
+        canvasRef.current.releasePointerCapture(e.pointerId);
+      }
+
+      if (wasTap) {
+        const lastTap = lastTouchTapRef.current;
+        const now = Date.now();
+        if (lastTap && now - lastTap.time <= DOUBLE_TAP_DELAY && getPointerDistance(lastTap.point, point) <= 30) {
+          onCanvasDoubleClick(screenToWorld(point));
+          lastTouchTapRef.current = null;
+        } else {
+          lastTouchTapRef.current = { time: now, point };
+        }
+      }
+
+      if (activePointersRef.current.size === 0) {
+        setIsPanning(false);
+        pinchGestureRef.current = null;
+        touchStartPointRef.current = null;
+        canvasPointerModeRef.current = null;
+        return;
+      }
+
+      if (activePointersRef.current.size === 1) {
+        const remainingPoint = Array.from(activePointersRef.current.values())[0];
+        pinchGestureRef.current = null;
+        touchStartPointRef.current = remainingPoint;
+        canvasPointerModeRef.current = 'touch-pan';
+        setIsPanning(true);
+        setStartPan({ x: remainingPoint.x - pan.x, y: remainingPoint.y - pan.y });
+      }
+      return;
+    }
+
     setIsPanning(false);
+    canvasPointerModeRef.current = null;
     if (marqueeRect) {
         const startWorld = screenToWorld(marqueeRect.start);
         const endWorld = screenToWorld(marqueeRect.end);
@@ -226,22 +322,67 @@ export const InfiniteCanvas = forwardRef<CanvasApi, InfiniteCanvasProps>(({
         }
         setMarqueeRect(null);
     }
-  }, [marqueeRect, screenToWorld, elements, onMarqueeSelect]);
+  }, [marqueeRect, screenToWorld, elements, onMarqueeSelect, onCanvasDoubleClick, pan]);
 
-  const handleMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+  const handlePointerCancel = useCallback((e: React.PointerEvent) => {
+    activePointersRef.current.delete(e.pointerId);
+    if (activePointersRef.current.size === 0) {
+      setIsPanning(false);
+      setMarqueeRect(null);
+      pinchGestureRef.current = null;
+      touchStartPointRef.current = null;
+      canvasPointerModeRef.current = null;
+    }
+  }, []);
+
+  const handlePointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.pointerType !== 'mouse') {
+      if (!activePointersRef.current.has(e.pointerId)) return;
+      e.preventDefault();
+      activePointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+      const points = Array.from(activePointersRef.current.values());
+      if (points.length >= 2) {
+        if (!pinchGestureRef.current) {
+          beginPinchGesture();
+          return;
+        }
+
+        const [first, second] = points;
+        const midpoint = getPointerMidpoint(first, second);
+        const nextZoom = Math.max(
+          MIN_ZOOM,
+          Math.min(MAX_ZOOM, pinchGestureRef.current.startZoom * (getPointerDistance(first, second) / pinchGestureRef.current.startDistance))
+        );
+
+        setZoom(nextZoom);
+        setPan({
+          x: midpoint.x - pinchGestureRef.current.worldAtMidpoint.x * nextZoom,
+          y: midpoint.y - pinchGestureRef.current.worldAtMidpoint.y * nextZoom,
+        });
+        return;
+      }
+
+      if (isPanning && canvasPointerModeRef.current === 'touch-pan') {
+        setPan({ x: e.clientX - startPan.x, y: e.clientY - startPan.y });
+      }
+      return;
+    }
+
     if (isPanning) {
       setPan({ x: e.clientX - startPan.x, y: e.clientY - startPan.y });
     } else if (marqueeRect) {
       setMarqueeRect(prev => prev ? { ...prev, end: { x: e.clientX, y: e.clientY } } : null);
     }
-  }, [isPanning, startPan, marqueeRect]);
+  }, [beginPinchGesture, isPanning, startPan, marqueeRect]);
 
   useEffect(() => {
     if (!activeGroupInteraction) return;
 
-    const handleMove = (e: MouseEvent) => {
+    const handleMove = (e: PointerEvent) => {
       const interaction = groupInteractionRef.current;
       if (!interaction) return;
+      if (e.pointerId !== interaction.pointerId) return;
 
       const dx = (e.clientX - interaction.lastPoint.x) / zoom;
       const dy = (e.clientY - interaction.lastPoint.y) / zoom;
@@ -274,11 +415,13 @@ export const InfiniteCanvas = forwardRef<CanvasApi, InfiniteCanvasProps>(({
       onInteractionEnd();
     };
 
-    window.addEventListener('mousemove', handleMove);
-    window.addEventListener('mouseup', handleEnd);
+    window.addEventListener('pointermove', handleMove);
+    window.addEventListener('pointerup', handleEnd);
+    window.addEventListener('pointercancel', handleEnd);
     return () => {
-      window.removeEventListener('mousemove', handleMove);
-      window.removeEventListener('mouseup', handleEnd);
+      window.removeEventListener('pointermove', handleMove);
+      window.removeEventListener('pointerup', handleEnd);
+      window.removeEventListener('pointercancel', handleEnd);
     };
   }, [activeGroupInteraction, zoom, onUpdateGroupBounds, onInteractionEnd]);
 
@@ -411,13 +554,16 @@ export const InfiniteCanvas = forwardRef<CanvasApi, InfiniteCanvasProps>(({
     })
     .filter((connector): connector is NonNullable<typeof connector> => connector !== null);
 
-  const startGroupInteraction = (e: React.MouseEvent, group: WorkflowGroup, type: GroupInteractionType) => {
-    if (e.button !== 0) return;
+  const startGroupInteraction = (e: React.PointerEvent, group: WorkflowGroup, type: GroupInteractionType) => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
     e.stopPropagation();
+    e.preventDefault();
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     setSelectionBounds(null);
     groupInteractionRef.current = {
       type,
       groupId: group.id,
+      pointerId: e.pointerId,
       lastPoint: { x: e.clientX, y: e.clientY },
       currentBounds: group.bounds,
     };
@@ -477,11 +623,12 @@ export const InfiniteCanvas = forwardRef<CanvasApi, InfiniteCanvasProps>(({
       ref={canvasRef}
       className={`relative w-full h-full overflow-hidden bg-gray-50 
         bg-[radial-gradient(#d1d5db_1px,transparent_1px)] [background-size:24px_24px]
-        ${cursorClass}`}
-      onMouseDown={handleMouseDown}
-      onMouseUp={handleMouseUp}
-      onMouseLeave={handleMouseUp}
-      onMouseMove={handleMouseMove}
+        ${cursorClass} [touch-action:none]`}
+      onPointerDown={handlePointerDown}
+      onPointerUp={handlePointerUp}
+      onPointerCancel={handlePointerCancel}
+      onPointerLeave={handlePointerUp}
+      onPointerMove={handlePointerMove}
       onWheel={handleWheel}
       onContextMenu={handleCanvasContextMenu}
       onDoubleClick={handleCanvasDoubleClick}
@@ -490,7 +637,7 @@ export const InfiniteCanvas = forwardRef<CanvasApi, InfiniteCanvasProps>(({
       onDrop={handleDrop}
     >
       <div
-        className="transform-gpu select-none"
+        className="transform-gpu select-none [touch-action:none]"
         style={{
           transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
           transformOrigin: '0 0',
@@ -562,7 +709,7 @@ export const InfiniteCanvas = forwardRef<CanvasApi, InfiniteCanvasProps>(({
               <button
                 title="Move group"
                 className="w-7 h-7 text-xs font-semibold bg-white text-gray-700 border border-gray-300 rounded shadow hover:bg-gray-100 cursor-move flex items-center justify-center"
-                onMouseDown={(e) => startGroupInteraction(e, group, 'move')}
+                onPointerDown={(e) => startGroupInteraction(e, group, 'move')}
               >
                 <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16">
                   <path d="M8 0 5.5 2.5h2v3h-3v-2L2 6l2.5 2.5v-2h3v3h-2L8 12l2.5-2.5h-2v-3h3v2L14 6l-2.5-2.5v2h-3v-3h2z"/>
@@ -593,7 +740,7 @@ export const InfiniteCanvas = forwardRef<CanvasApi, InfiniteCanvasProps>(({
                 key={handle}
                 className={`absolute bg-white border-2 border-blue-600 pointer-events-auto ${getGroupResizeHandleCursor(handle)}`}
                 style={getGroupResizeHandleStyle(handle)}
-                onMouseDown={(e) => startGroupInteraction(e, group, `resize-${handle}` as GroupInteractionType)}
+                onPointerDown={(e) => startGroupInteraction(e, group, `resize-${handle}` as GroupInteractionType)}
               />
             ))}
           </div>
@@ -622,7 +769,7 @@ export const InfiniteCanvas = forwardRef<CanvasApi, InfiniteCanvasProps>(({
                 onClick={handleGenerateClick}
                 className="px-4 py-2 text-sm bg-purple-600 text-white rounded-lg shadow-lg hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-opacity-50 transition-all transform hover:scale-105 disabled:bg-gray-400 disabled:scale-100 disabled:cursor-wait"
             >
-                Generate ✨
+                Generate
             </button>
             <button
                 onClick={handleCreateGroupClick}

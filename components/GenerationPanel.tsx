@@ -10,21 +10,24 @@ interface GenerationPanelProps {
 }
 
 export const GenerationPanel: React.FC<GenerationPanelProps> = ({ generationItems, annotationPreview, onAddToCanvas, onDelete, onCancelTask }) => {
-    const [isOpen, setIsOpen] = useState(true);
+    const [isOpen, setIsOpen] = useState(() => (
+        typeof window === 'undefined' ? true : window.matchMedia('(min-width: 768px)').matches
+    ));
 
     return (
         <>
             <button
                 onClick={() => setIsOpen(!isOpen)}
-                className={`absolute top-1/2 -translate-y-1/2 z-20 bg-white/80 backdrop-blur-sm p-2 rounded-l-lg shadow-lg border-y border-l border-gray-200 transition-transform duration-300 ${isOpen ? 'right-80' : 'right-0'}`}
+                className={`fixed md:absolute right-3 top-3 z-30 md:z-20 bg-white/90 md:bg-white/80 backdrop-blur-sm inline-flex h-11 md:h-auto items-center gap-2 px-3 md:px-2 py-2 rounded-lg md:rounded-l-lg shadow-lg border border-gray-200 md:border-y md:border-l md:border-r-0 text-sm font-semibold text-gray-700 transition-all duration-300 md:top-1/2 md:-translate-y-1/2 ${isOpen ? 'md:right-80' : 'md:right-0'}`}
                 aria-label={isOpen ? 'Close generation panel' : 'Open generation panel'}
             >
                 <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" className={`transition-transform duration-300 ${isOpen ? 'rotate-180' : ''}`} viewBox="0 0 16 16">
                     <path fillRule="evenodd" d="M11.354 1.646a.5.5 0 0 1 0 .708L5.707 8l5.647 5.646a.5.5 0 0 1-.708.708l-6-6a.5.5 0 0 1 0-.708l6-6a.5.5 0 0 1 .708 0z" />
                 </svg>
+                History
             </button>
             <div
-                className={`absolute top-0 right-0 h-full z-20 p-4 bg-white/80 backdrop-blur-sm shadow-lg border-l border-gray-200 w-80 flex flex-col gap-4 transition-transform duration-300 ${isOpen ? 'translate-x-0' : 'translate-x-full'}`}
+                className={`fixed md:absolute right-0 bottom-0 md:top-0 h-[70dvh] md:h-full z-20 p-4 bg-white/90 md:bg-white/80 backdrop-blur-sm shadow-lg border-t md:border-t-0 md:border-l border-gray-200 rounded-t-2xl md:rounded-none w-full md:w-80 flex flex-col gap-4 transition-transform duration-300 overscroll-contain ${isOpen ? 'translate-y-0 md:translate-x-0' : 'translate-y-full md:translate-y-0 md:translate-x-full'}`}
             >
                 <div>
                     <h1 className="text-xl font-bold text-gray-800">Generation History</h1>
