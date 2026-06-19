@@ -93,9 +93,22 @@ export const TransformableElement: React.FC<TransformableElementProps> = ({ elem
       setInteraction(interactionDetails);
 
     }, [element, onSelect]);
+
+    const handleTextPointerDown = useCallback((e: React.PointerEvent<HTMLTextAreaElement>) => {
+        if (e.pointerType === 'mouse' && e.button !== 0) return;
+
+        if (isEditing) {
+            e.stopPropagation();
+            onSelect(element.id, e.shiftKey);
+            return;
+        }
+
+        handleInteractionStart(e, 'drag');
+    }, [element.id, handleInteractionStart, isEditing, onSelect]);
     
     const handleInteractionMove = useCallback((e: PointerEvent) => {
         if (!interaction || e.pointerId !== interaction.pointerId) return;
+        e.preventDefault();
 
         const { type, startPoint, startElement } = interaction;
         const dx = (e.clientX - startPoint.x) / zoom;
@@ -322,15 +335,14 @@ export const TransformableElement: React.FC<TransformableElementProps> = ({ elem
                                     readOnly={!isEditing}
                                     onChange={(e) => onUpdate({ ...el, content: e.target.value })}
                                     onBlur={() => setIsEditing(false)}
-                                    onPointerDown={(e) => {
-                                      if (e.pointerType === 'mouse' && e.button !== 0) return;
-                                      onSelect(element.id, e.shiftKey);
-                                      if (isEditing) {
-                                        e.stopPropagation();
-                                      }
-                                    }}
+                                    onPointerDown={handleTextPointerDown}
                                     className={`w-full h-full bg-transparent text-white text-center p-4 resize-none border-none focus:outline-none placeholder-gray-200/70 ${isEditing ? 'cursor-text' : 'cursor-move'}`}
-                                    style={{ fontFamily: 'inherit', fontSize: 'inherit' }}
+                                    style={{
+                                      fontFamily: 'inherit',
+                                      fontSize: 'inherit',
+                                      pointerEvents: isEditing ? 'auto' : 'none',
+                                      overflow: isEditing ? 'auto' : 'hidden',
+                                    }}
                                     placeholder="Write..."
                                 />
                             </div>
@@ -347,15 +359,15 @@ export const TransformableElement: React.FC<TransformableElementProps> = ({ elem
                                     readOnly={!isEditing}
                                     onChange={(e) => onUpdate({ ...el, content: e.target.value })}
                                     onBlur={() => setIsEditing(false)}
-                                    onPointerDown={(e) => {
-                                      if (e.pointerType === 'mouse' && e.button !== 0) return;
-                                      onSelect(element.id, e.shiftKey);
-                                      if (isEditing) {
-                                        e.stopPropagation();
-                                      }
-                                    }}
+                                    onPointerDown={handleTextPointerDown}
                                     className={`w-full h-full bg-transparent text-center p-2 resize-none border-none focus:outline-none ${el.textColor} ${isEditing ? 'cursor-text' : 'cursor-move'}`}
-                                    style={{ fontFamily: 'inherit', fontSize: el.fontSize, lineHeight: 1.25 }}
+                                    style={{
+                                      fontFamily: 'inherit',
+                                      fontSize: el.fontSize,
+                                      lineHeight: 1.25,
+                                      pointerEvents: isEditing ? 'auto' : 'none',
+                                      overflow: isEditing ? 'auto' : 'hidden',
+                                    }}
                                     placeholder="Label..."
                                 />
                             </div>
