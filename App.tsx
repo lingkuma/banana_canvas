@@ -589,7 +589,7 @@ const App: React.FC = () => {
   const [selectedModel, setSelectedModel] = useState<'gemini-2.5-flash-image' | 'gemini-3-pro-image-preview' | 'gemini-2.0-flash'>('gemini-2.5-flash-image');
   const [aspectRatio, setAspectRatio] = useState<ImageAspectRatio>('1:1');
   const [imageResolution, setImageResolution] = useState<ImageResolution>('1K');
-  const [imageCount, setImageCount] = useState<number>(2);
+  const [imageCount, setImageCount] = useState<number>(1);
   const [hasProKey, setHasProKey] = useState(false);
 
   // Custom API State
