@@ -28,6 +28,11 @@ const normalizeBaseUrl = (value) => {
   return baseUrl;
 };
 
+const parseModelList = (value) => String(value || '')
+  .split(/[\r\n,]+/)
+  .map((model) => model.trim())
+  .filter(Boolean);
+
 export const readAiConfig = (env = process.env) => {
   const provider = normalizeProvider(env.AI_PROVIDER);
   const apiKey = String(env.AI_API_KEY || '').trim();
@@ -35,12 +40,14 @@ export const readAiConfig = (env = process.env) => {
   const model = String(
     env.AI_MODEL || (provider === 'gemini' ? 'gemini-2.5-flash-image' : 'gpt-image-2')
   ).trim();
+  const models = [...new Set([model, ...parseModelList(env.AI_MODELS)])];
 
   return {
     provider,
     apiKey,
     baseUrl,
     model,
+    models,
     stream: parseBoolean(env.AI_STREAM),
     requestSize: String(env.AI_MAX_REQUEST_SIZE || '100mb'),
   };
@@ -50,6 +57,7 @@ const publicConfig = (config) => ({
   configured: Boolean(config.apiKey),
   provider: config.provider,
   model: config.model,
+  models: config.models,
   stream: config.stream,
 });
 
@@ -57,6 +65,15 @@ const requireApiKey = (config, res) => {
   if (config.apiKey) return true;
   res.status(503).json({ error: 'The server AI_API_KEY is not configured.' });
   return false;
+};
+
+const resolveRequestModel = (config, requestedModel, res) => {
+  const model = String(requestedModel || config.model).trim();
+  if (config.models.includes(model)) return model;
+  res.status(400).json({
+    error: `Unsupported model: ${model}. Choose one of the models configured in AI_MODELS.`,
+  });
+  return null;
 };
 
 export const createAiRouter = (env = process.env) => {
@@ -91,6 +108,8 @@ export const createAiRouter = (env = process.env) => {
         error: 'AI_BASE_URL is required for an OpenAI-compatible channel.',
       });
     }
+    const requestModel = resolveRequestModel(config, req.body?.model, res);
+    if (!requestModel) return;
 
     try {
       const upstream = await fetch(config.baseUrl + '/chat/completions', {
@@ -102,7 +121,7 @@ export const createAiRouter = (env = process.env) => {
         },
         body: JSON.stringify({
           ...req.body,
-          model: config.model,
+          model: requestModel,
           stream: config.stream,
         }),
       });
@@ -133,6 +152,8 @@ export const createAiRouter = (env = process.env) => {
         error: 'AI_BASE_URL is required for an OpenAI-compatible channel.',
       });
     }
+    const requestModel = resolveRequestModel(config, req.body?.model, res);
+    if (!requestModel) return;
 
     const operation = req.params.operation;
     if (operation !== 'generations' && operation !== 'edits') {
@@ -149,7 +170,7 @@ export const createAiRouter = (env = process.env) => {
         },
         body: JSON.stringify({
           ...req.body,
-          model: config.model,
+          model: requestModel,
           stream: config.stream,
         }),
       });
@@ -175,6 +196,8 @@ export const createAiRouter = (env = process.env) => {
       return res.status(409).json({ error: 'The server AI_PROVIDER is not gemini.' });
     }
     if (!requireApiKey(config, res)) return;
+    const requestModel = resolveRequestModel(config, req.body?.model, res);
+    if (!requestModel) return;
 
     try {
       const ai = new GoogleGenAI({
@@ -182,7 +205,7 @@ export const createAiRouter = (env = process.env) => {
         ...(config.baseUrl ? { httpOptions: { baseUrl: config.baseUrl } } : {}),
       });
       const response = await ai.models.generateContent({
-        model: config.model,
+        model: requestModel,
         contents: req.body?.contents,
         config: req.body?.config,
       });

@@ -62,11 +62,14 @@ OpenAI 兼容渠道示例：
 AI_PROVIDER=openai-compatible
 AI_BASE_URL=https://api.openai.com/v1
 AI_API_KEY=你的密钥
-AI_MODEL=gpt-image-1
+AI_MODEL=gpt-image-2
+AI_MODELS=gpt-image-2,gemini-3.1-flash-image,gemini-3-pro-image
 AI_STREAM=false
 HOST=0.0.0.0
 PORT=3000
 ```
+
+`AI_MODEL` 是默认模型，`AI_MODELS` 是网页下拉框中允许用户选择的模型，用英文逗号分隔。服务端只接受列表中的模型，用户可以自行选择，但看不到 API 密钥。Gemini 图像模型会通过 `/chat/completions` 请求，并兼容 `message.images[]` / `delta.images[]` 图片返回格式。
 
 Gemini 渠道示例：
 
@@ -75,6 +78,7 @@ AI_PROVIDER=gemini
 AI_BASE_URL=
 AI_API_KEY=你的 Gemini 密钥
 AI_MODEL=gemini-2.5-flash-image
+AI_MODELS=gemini-2.5-flash-image,gemini-3.1-flash-image,gemini-3-pro-image
 AI_STREAM=false
 HOST=0.0.0.0
 PORT=3000

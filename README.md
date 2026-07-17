@@ -49,8 +49,10 @@ View your app in AI Studio: https://ai.studio/apps/ad0efd5a-2437-443d-970c-9ca50
 
 1. Install dependencies: `pnpm install`
 2. Create the local configuration: `Copy-Item .env.example .env`
-3. Set the AI provider, Base URL, API key, and model in `.env`
+3. Set the AI provider, Base URL, API key, default model (`AI_MODEL`), and selectable models (`AI_MODELS`) in `.env`
 4. Start the development server: `pnpm run dev`
+
+`AI_MODELS` is a comma-separated allowlist displayed in the browser model selector. Each user can choose a model without seeing the server API key. OpenAI-compatible Gemini image models use `/chat/completions` with image-output settings and support images returned in `message.images[]` or `delta.images[]`.
 
 ## Internal Server Deployment
 

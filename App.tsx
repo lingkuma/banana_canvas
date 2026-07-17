@@ -44,6 +44,7 @@ interface ServerAiConfig {
   configured: boolean;
   provider: 'gemini' | 'openai-compatible';
   model: string;
+  models: string[];
   stream: boolean;
 }
 
@@ -76,6 +77,62 @@ const GPT_IMAGE_SIZES: Record<ImageResolution, Record<ImageAspectRatio, string>>
 
 const isGptImageModel = (model: string) => /^gpt-image(?:-|$)/i.test(model.trim());
 const isGptModel = (model: string) => /^gpt(?:-|$)/i.test(model.trim());
+const isGeminiImageModel = (model: string) => /(?:^|\/)gemini-.*(?:image|imagen)(?:[-.:]|$)/i.test(model.trim());
+
+const parseImageResultText = (value: string, allowRawBase64 = false) => {
+  const text = value.trim();
+  if (!text) return null;
+
+  const markdownImage = text.match(/!\[[^\]]*\]\((data:image\/[^)]+|https?:\/\/[^)]+)\)/i);
+  if (markdownImage) return markdownImage[1];
+
+  const embeddedDataUrl = text.match(/data:image\/[a-z0-9.+-]+;base64,[a-z0-9+/_=-]+/i);
+  if (embeddedDataUrl) return embeddedDataUrl[0];
+
+  if (/^https?:\/\//i.test(text) || /^data:image\//i.test(text)) return text;
+  if (allowRawBase64 && text.length > 200) return `data:image/png;base64,${text}`;
+  return null;
+};
+
+const extractOpenAiImageResult = (payload: any): string | null => {
+  const visit = (value: any, depth = 0, allowRawBase64 = false): string | null => {
+    if (value == null || depth > 5) return null;
+    if (typeof value === 'string') return parseImageResultText(value, allowRawBase64);
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        const result = visit(item, depth + 1, allowRawBase64);
+        if (result) return result;
+      }
+      return null;
+    }
+    if (typeof value !== 'object') return null;
+
+    const base64Result = visit(value.b64_json, depth + 1, true)
+      || visit(value.data, depth + 1, true);
+    if (base64Result) return base64Result;
+
+    const directResult = visit(value.url, depth + 1)
+      || visit(value.image_url, depth + 1)
+      || visit(value.inline_data, depth + 1, true)
+      || visit(value.inlineData, depth + 1, true);
+    if (directResult) return directResult;
+
+    for (const key of ['images', 'image', 'content', 'text', 'parts']) {
+      const result = visit(value[key], depth + 1);
+      if (result) return result;
+    }
+    return null;
+  };
+
+  const topLevelResult = visit(payload?.data) || visit(payload?.b64_json, 0, true);
+  if (topLevelResult) return topLevelResult;
+
+  for (const choice of payload?.choices || []) {
+    const result = visit(choice?.message) || visit(choice?.delta);
+    if (result) return result;
+  }
+  return null;
+};
 
 const appendImageSizeRequirement = (
   prompt: string,
@@ -86,6 +143,12 @@ const appendImageSizeRequirement = (
   const requirement = `Output size requirement: Generate the final image at ${resolution} resolution with a ${ratio} aspect ratio, exactly ${size} pixels.`;
   return `${prompt}\n\n${requirement}`;
 };
+
+const appendGeminiImageRequirement = (
+  prompt: string,
+  resolution: ImageResolution,
+  ratio: ImageAspectRatio
+) => `${prompt}\n\nOutput requirement: Generate the final image at ${resolution} resolution with a ${ratio} aspect ratio.`;
 
 const getOpenAiImageSize = (
   model: string,
@@ -525,8 +588,10 @@ const App: React.FC = () => {
     configured: false,
     provider: 'gemini',
     model: '',
+    models: [],
     stream: false,
   });
+  const [serverSelectedModel, setServerSelectedModel] = useState('');
   const [serverAiConfigError, setServerAiConfigError] = useState('');
   const [customGeminiKey, setCustomGeminiKey] = useState(
     () => localStorage.getItem('customGeminiKey') || ''
@@ -561,7 +626,11 @@ const App: React.FC = () => {
       })
       .then(config => {
         if (!active) return;
-        setServerAiConfig(config);
+        const models = config.models?.length ? config.models : [config.model].filter(Boolean);
+        const normalizedConfig = { ...config, models };
+        const savedModel = localStorage.getItem('serverAiModel');
+        setServerAiConfig(normalizedConfig);
+        setServerSelectedModel(savedModel && models.includes(savedModel) ? savedModel : config.model);
         setServerAiConfigError('');
       })
       .catch(error => {
@@ -581,7 +650,8 @@ const App: React.FC = () => {
     localStorage.setItem('openaiKey', openaiKey);
     localStorage.setItem('openaiStream', openaiStream.toString());
     localStorage.setItem('openaiModelsList', JSON.stringify(openaiModelsList));
-  }, [apiProvider, customGeminiKey, openaiBaseUrl, openaiModel, openaiKey, openaiStream, openaiModelsList]);
+    if (serverSelectedModel) localStorage.setItem('serverAiModel', serverSelectedModel);
+  }, [apiProvider, customGeminiKey, openaiBaseUrl, openaiModel, openaiKey, openaiStream, openaiModelsList, serverSelectedModel]);
 
   const handleCloseApiConfig = () => {
     if (apiProvider === 'openai-custom' && openaiModel && !openaiModelsList.includes(openaiModel)) {
@@ -1176,7 +1246,7 @@ const App: React.FC = () => {
         const useServerOpenAi = apiProvider === 'server' && serverAiConfig.provider === 'openai-compatible';
         if (apiProvider === 'openai-custom' || useServerOpenAi) {
             const messages: any[] = [];
-            const requestModel = useServerOpenAi ? serverAiConfig.model : openaiModel;
+            const requestModel = useServerOpenAi ? serverSelectedModel : openaiModel;
             const requestStream = useServerOpenAi ? serverAiConfig.stream : openaiStream;
             const useImageApi = isGptImageModel(requestModel);
             const sourceImageUrls = imageElements.filter(el => el.src).map(el => el.src);
@@ -1195,9 +1265,13 @@ const App: React.FC = () => {
             );
             const generationPrompt = isGptModel(requestModel)
                 ? appendImageSizeRequirement(baseGenerationPrompt, imageResolution, aspectRatio, openaiSize)
+                : isGeminiImageModel(requestModel)
+                    ? appendGeminiImageRequirement(baseGenerationPrompt, imageResolution, aspectRatio)
                 : baseGenerationPrompt;
             const editPrompt = isGptModel(requestModel)
                 ? appendImageSizeRequirement(baseEditPrompt, imageResolution, aspectRatio, openaiSize)
+                : isGeminiImageModel(requestModel)
+                    ? appendGeminiImageRequirement(baseEditPrompt, imageResolution, aspectRatio)
                 : baseEditPrompt;
 
             if (hasImageInputs || annotationAttachment) {
@@ -1245,6 +1319,13 @@ const App: React.FC = () => {
                     : {
                         model: requestModel,
                         messages,
+                        ...(isGeminiImageModel(requestModel) ? {
+                            modalities: ['image', 'text'],
+                            image_config: {
+                                aspect_ratio: aspectRatio,
+                                image_size: imageResolution,
+                            },
+                        } : {}),
                         size: openaiSize,
                         n: 1,
                         stream: requestStream,
@@ -1269,12 +1350,11 @@ const App: React.FC = () => {
                 }
                 if (signal.aborted) return null;
 
-                const formatBase64 = (b64: string) => b64.startsWith('data:') ? b64 : `data:image/png;base64,${b64}`;
-
                 if (requestStream) {
                     const reader = response.body?.getReader();
                     const decoder = new TextDecoder("utf-8");
                     let contentStr = "";
+                    let streamedImage: string | null = null;
                     if (reader) {
                         let done = false;
                         let buffer = "";
@@ -1287,11 +1367,14 @@ const App: React.FC = () => {
                                 const lines = buffer.split("\n");
                                 buffer = lines.pop() || "";
                                 for (const line of lines) {
-                                    if (line.startsWith("data: ") && line.trim() !== "data: [DONE]") {
+                                    const eventData = line.startsWith('data:') ? line.slice(5).trimStart() : '';
+                                    if (eventData && eventData.trim() !== '[DONE]') {
                                         try {
-                                            const data = JSON.parse(line.substring(6));
+                                            const data = JSON.parse(eventData);
+                                            streamedImage ||= extractOpenAiImageResult(data);
                                             if (data.choices?.[0]?.delta?.content) {
-                                                contentStr += data.choices[0].delta.content;
+                                                const content = data.choices[0].delta.content;
+                                                if (typeof content === 'string') contentStr += content;
                                             } else if (data.choices?.[0]?.delta?.image?.data) {
                                                 contentStr += data.choices[0].delta.image.data;
                                             } else if (data.b64_json) {
@@ -1310,62 +1393,13 @@ const App: React.FC = () => {
                         }
                     }
                     
-                    if (contentStr) {
-                         const match = contentStr.match(/!\[.*?\]\((.*?)\)/);
-                         if (match) {
-                             return match[1];
-                         }
-                         if (contentStr.startsWith('http') || contentStr.startsWith('data:image')) {
-                             return contentStr;
-                         }
-                         // If it's a long string and not a URL, it might be raw base64
-                         if (contentStr.length > 200) {
-                             return formatBase64(contentStr);
-                         }
-                    }
-                    return null;
+                    return streamedImage || parseImageResultText(contentStr, true);
                 }
 
                 const data = await response.json();
                 if (signal.aborted) return null;
 
-                // 1. Check data.data[0].b64_json
-                if (data.data?.[0]?.b64_json) {
-                    return formatBase64(data.data[0].b64_json);
-                }
-                
-                // 2. Check data.data[0].url
-                if (data.data?.[0]?.url) {
-                    return data.data[0].url;
-                }
-
-                if (data.choices?.[0]?.message) {
-                    const message = data.choices[0].message;
-
-                    // 3. Check choices[0].message.image.data
-                    if (message.image?.data) {
-                        return formatBase64(message.image.data);
-                    }
-
-                    // 4. Check choices[0].message.content.image.data (if content is an object)
-                    if (message.content?.image?.data) {
-                        return formatBase64(message.content.image.data);
-                    }
-
-                    // 5. Check choices[0].message.content as string (markdown or raw URL)
-                    if (typeof message.content === 'string') {
-                        const match = message.content.match(/!\[.*?\]\((.*?)\)/);
-                        if (match) {
-                            return match[1];
-                        }
-                        if (message.content.startsWith('http') || message.content.startsWith('data:image')) {
-                            return message.content;
-                        }
-                    }
-                }
-                
-                // Fallback
-                return null;
+                return extractOpenAiImageResult(data);
             };
 
             const results = await Promise.allSettled(Array.from({ length: imageCount }, () => generateSingleImageOpenAI()));
@@ -1401,7 +1435,7 @@ const App: React.FC = () => {
                         headers: { 'Content-Type': 'application/json' },
                         signal,
                         body: JSON.stringify({
-                            model: serverAiConfig.model,
+                            model: serverSelectedModel,
                             contents: { parts },
                             config: commonConfig,
                         }),
@@ -1497,7 +1531,7 @@ const App: React.FC = () => {
       } finally {
         generationControllersRef.current.delete(taskId);
       }
-  }, [elements, selectedModel, aspectRatio, imageResolution, imageCount, apiProvider, serverAiConfig, serverAiConfigError, customGeminiKey, openaiBaseUrl, openaiModel, openaiKey, openaiStream, setElements]);
+  }, [elements, selectedModel, aspectRatio, imageResolution, imageCount, apiProvider, serverAiConfig, serverSelectedModel, serverAiConfigError, customGeminiKey, openaiBaseUrl, openaiModel, openaiKey, openaiStream, setElements]);
 
   const handleCreateGroup = useCallback((bounds: Bounds, inputElementIds: string[]) => {
       const groupId = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
@@ -1943,15 +1977,25 @@ const App: React.FC = () => {
             {apiProvider === 'server' ? (
                 <div className="flex flex-col gap-1.5">
                     <div className="flex items-center justify-between gap-2">
-                        <span className="text-xs font-medium text-gray-700 truncate">
-                            {serverAiConfig.model || 'Not configured'}
-                        </span>
+                        <select
+                            value={serverSelectedModel}
+                            onChange={(event) => setServerSelectedModel(event.target.value)}
+                            disabled={serverAiConfig.models.length === 0}
+                            aria-label="Server AI model"
+                            className="min-w-0 flex-1 rounded-md border border-gray-300 bg-white px-2 py-1.5 text-xs text-gray-700 focus:outline-none focus:ring-1 focus:ring-purple-500 disabled:bg-gray-100"
+                        >
+                            {serverAiConfig.models.length === 0 ? (
+                                <option value="">Not configured</option>
+                            ) : serverAiConfig.models.map(model => (
+                                <option key={model} value={model}>{model}</option>
+                            ))}
+                        </select>
                         <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ${serverAiConfig.configured ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
                             {serverAiConfig.configured ? 'Server ready' : 'Needs .env'}
                         </span>
                     </div>
                     <span className="text-[10px] text-gray-500">
-                        {serverAiConfig.provider === 'openai-compatible' ? 'OpenAI-compatible' : 'Gemini'} · managed by server
+                        {serverAiConfig.provider === 'openai-compatible' ? 'OpenAI-compatible' : 'Gemini'} · {serverAiConfig.models.length} model{serverAiConfig.models.length === 1 ? '' : 's'} available
                     </span>
                     {serverAiConfigError && (
                         <span className="text-[10px] text-red-600">{serverAiConfigError}</span>
@@ -2248,10 +2292,11 @@ const App: React.FC = () => {
                   </div>
                   <div className="mt-1 text-xs text-gray-600">
                     Channel: {serverAiConfig.provider || 'unknown'}<br />
-                    Model: {serverAiConfig.model || 'not set'}
+                    Default model: {serverAiConfig.model || 'not set'}<br />
+                    Available models: {serverAiConfig.models.join(', ') || 'none'}
                   </div>
                   <div className="mt-2 text-xs text-gray-500">
-                    Edit the server's .env file and restart the server to change these values. The API key is never sent to this browser.
+                    Set AI_MODEL and AI_MODELS in the server's .env file, then restart the server. Each user can choose an allowed model without seeing the API key.
                   </div>
                   {serverAiConfigError && (
                     <div className="mt-2 text-xs text-red-600">{serverAiConfigError}</div>
