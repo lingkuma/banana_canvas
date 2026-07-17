@@ -85,6 +85,14 @@ const validateGptImage2Dimensions = (width: number, height: number) => {
 };
 
 const isGptImageModel = (model: string) => /^gpt-image(?:-|$)/i.test(model.trim());
+const isGptModel = (model: string) => /^gpt(?:-|$)/i.test(model.trim());
+
+const appendImageSizeRequirement = (prompt: string, size: string) => {
+  const requirement = size === 'auto'
+    ? 'Output size requirement: Automatically choose the most suitable image dimensions based on the prompt.'
+    : `Output size requirement: The final image must be exactly ${size} pixels.`;
+  return `${prompt}\n\n${requirement}`;
+};
 
 const getOpenAiImageSize = (
   model: string,
@@ -1194,8 +1202,8 @@ const App: React.FC = () => {
             const inputImageUrls = annotationAttachment && hasImageInputs
                 ? [...sourceImageUrls, annotationAttachment]
                 : sourceImageUrls;
-            const generationPrompt = `Generate a completely new image based on this description: "${instructions}"`;
-            const editPrompt = annotationAttachment
+            const baseGenerationPrompt = `Generate a completely new image based on this description: "${instructions}"`;
+            const baseEditPrompt = annotationAttachment
                 ? `Using the clean source image(s) plus the annotated reference image, follow these instructions: "${instructions}". The annotated reference may contain arrows or visual text labels that indicate what area to edit; do not treat those markings as part of the desired final image unless the instructions explicitly say to keep them.`
                 : `Using the source image(s) as references, follow these instructions: "${instructions}"`;
             const openaiSize = getOpenAiImageSize(
@@ -1206,10 +1214,16 @@ const App: React.FC = () => {
                 gptImage2CustomWidth,
                 gptImage2CustomHeight
             );
+            const generationPrompt = isGptModel(requestModel)
+                ? appendImageSizeRequirement(baseGenerationPrompt, openaiSize)
+                : baseGenerationPrompt;
+            const editPrompt = isGptModel(requestModel)
+                ? appendImageSizeRequirement(baseEditPrompt, openaiSize)
+                : baseEditPrompt;
 
             if (hasImageInputs || annotationAttachment) {
                 const content: any[] = [
-                    { type: "text", text: `Using the clean source image(s) plus the annotated reference image, follow these instructions: "${instructions}". The annotated reference may contain arrows or visual text labels that indicate what area to edit; do not treat those markings as part of the desired final image unless the instructions explicitly say to keep them.` }
+                    { type: "text", text: editPrompt }
                 ];
                 imageElements.filter(el => el.src).forEach(el => {
                     content.push({
@@ -1225,7 +1239,7 @@ const App: React.FC = () => {
                 }
                 messages.push({ role: "user", content });
             } else {
-                messages.push({ role: "user", content: `Generate a completely new image based on this description: "${instructions}"` });
+                messages.push({ role: "user", content: generationPrompt });
             }
 
 
