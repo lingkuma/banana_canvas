@@ -144,12 +144,6 @@ const appendImageSizeRequirement = (
   return `${prompt}\n\n${requirement}`;
 };
 
-const appendGeminiImageRequirement = (
-  prompt: string,
-  resolution: ImageResolution,
-  ratio: ImageAspectRatio
-) => `${prompt}\n\nOutput requirement: Generate the final image at ${resolution} resolution with a ${ratio} aspect ratio.`;
-
 const getOpenAiImageSize = (
   model: string,
   resolution: ImageResolution,
@@ -1243,6 +1237,8 @@ const App: React.FC = () => {
             instructions += `\n\n[Web Page Context]\n${iframeContext}\n(Note: You cannot access the web page directly, but use the URL and user's intent to inform the generation.)`;
         }
 
+        const promptImageSize = GPT_IMAGE_SIZES[imageResolution][aspectRatio];
+
         const useServerOpenAi = apiProvider === 'server' && serverAiConfig.provider === 'openai-compatible';
         if (apiProvider === 'openai-custom' || useServerOpenAi) {
             const messages: any[] = [];
@@ -1263,16 +1259,18 @@ const App: React.FC = () => {
                 imageResolution,
                 aspectRatio
             );
-            const generationPrompt = isGptModel(requestModel)
-                ? appendImageSizeRequirement(baseGenerationPrompt, imageResolution, aspectRatio, openaiSize)
-                : isGeminiImageModel(requestModel)
-                    ? appendGeminiImageRequirement(baseGenerationPrompt, imageResolution, aspectRatio)
-                : baseGenerationPrompt;
-            const editPrompt = isGptModel(requestModel)
-                ? appendImageSizeRequirement(baseEditPrompt, imageResolution, aspectRatio, openaiSize)
-                : isGeminiImageModel(requestModel)
-                    ? appendGeminiImageRequirement(baseEditPrompt, imageResolution, aspectRatio)
-                : baseEditPrompt;
+            const generationPrompt = appendImageSizeRequirement(
+                baseGenerationPrompt,
+                imageResolution,
+                aspectRatio,
+                promptImageSize
+            );
+            const editPrompt = appendImageSizeRequirement(
+                baseEditPrompt,
+                imageResolution,
+                aspectRatio,
+                promptImageSize
+            );
 
             if (hasImageInputs || annotationAttachment) {
                 const content: any[] = [
@@ -1464,7 +1462,12 @@ const App: React.FC = () => {
                     imageParts.push({ inlineData: { data, mimeType } });
                 }
 
-                const promptText = `Using the clean source image(s) plus the annotated reference image, follow these instructions: "${instructions}". The annotated reference may contain arrows or visual text labels that indicate what area to edit; do not treat those markings as part of the desired final image unless the instructions explicitly say to keep them.`;
+                const promptText = appendImageSizeRequirement(
+                    `Using the clean source image(s) plus the annotated reference image, follow these instructions: "${instructions}". The annotated reference may contain arrows or visual text labels that indicate what area to edit; do not treat those markings as part of the desired final image unless the instructions explicitly say to keep them.`,
+                    imageResolution,
+                    aspectRatio,
+                    promptImageSize
+                );
                 const parts = [...imageParts, { text: promptText }];
                 
                 const generateSingleImage = async () => {
@@ -1491,7 +1494,12 @@ const App: React.FC = () => {
                 }
 
             } else { // Generating new image from text description
-                const promptText = `Generate a completely new image based on this description: "${instructions}"`;
+                const promptText = appendImageSizeRequirement(
+                    `Generate a completely new image based on this description: "${instructions}"`,
+                    imageResolution,
+                    aspectRatio,
+                    promptImageSize
+                );
 
                 const generateSingleImage = async () => {
                     const response = await generateGeminiContent([{ text: promptText }]);
