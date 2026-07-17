@@ -45,10 +45,23 @@ View your app in AI Studio: https://ai.studio/apps/ad0efd5a-2437-443d-970c-9ca50
 
 ## Run Locally
 
-**Prerequisites:** Node.js
+**Prerequisites:** Node.js 20 or newer
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+1. Install dependencies: `pnpm install`
+2. Create the local configuration: `Copy-Item .env.example .env`
+3. Set the AI provider, Base URL, API key, and model in `.env`
+4. Start the development server: `pnpm run dev`
+
+## Internal Server Deployment
+
+The server reads `.env` and proxies AI requests. The API key and Base URL are not sent to browsers or committed to Git.
+
+Build and start the server:
+
+```powershell
+pnpm install
+pnpm run build
+pnpm start
+```
+
+Colleagues on the same network can open `http://SERVER_IP:3000`. Restart the server after changing `.env`. This app does not include user authentication, so expose it only on a trusted internal network or behind an existing company gateway.

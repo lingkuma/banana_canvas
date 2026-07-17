@@ -43,12 +43,49 @@ This contains everything you need to run your app locally.
 
 View your app in AI Studio: https://ai.studio/apps/ad0efd5a-2437-443d-970c-9ca50a8b03d5
 
-## Run Locally
+## 本地开发
 
-**Prerequisites:** Node.js
+**环境要求：** Node.js 20 或更高版本
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+1. 安装依赖：`pnpm install`
+2. 从示例创建本地配置：`Copy-Item .env.example .env`
+3. 在 `.env` 中设置 AI 渠道、Base URL、密钥和模型
+4. 启动开发服务：`pnpm run dev`
+
+## 公司内网部署
+
+`.env` 只由服务器读取，AI 密钥和 Base URL 不会发送到浏览器，也不会被 Git 提交。
+
+OpenAI 兼容渠道示例：
+
+```dotenv
+AI_PROVIDER=openai-compatible
+AI_BASE_URL=https://api.openai.com/v1
+AI_API_KEY=你的密钥
+AI_MODEL=gpt-image-1
+AI_STREAM=false
+HOST=0.0.0.0
+PORT=3000
+```
+
+Gemini 渠道示例：
+
+```dotenv
+AI_PROVIDER=gemini
+AI_BASE_URL=
+AI_API_KEY=你的 Gemini 密钥
+AI_MODEL=gemini-2.5-flash-image
+AI_STREAM=false
+HOST=0.0.0.0
+PORT=3000
+```
+
+构建并启动：
+
+```powershell
+pnpm install
+pnpm run build
+pnpm start
+```
+
+同一内网的其他人可访问 `http://服务器IP:3000`。修改 `.env` 后需要重启服务。当前服务不包含用户登录功能，请只部署在受信任的公司内网或放在已有的内网网关后面。

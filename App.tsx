@@ -38,6 +38,76 @@ interface InternalClipboardSnapshot {
   bounds: ReturnType<typeof getBoundingBox>;
 }
 
+type ApiProvider = 'server' | 'gemini-custom' | 'openai-custom';
+
+interface ServerAiConfig {
+  configured: boolean;
+  provider: 'gemini' | 'openai-compatible';
+  model: string;
+  stream: boolean;
+}
+
+type ImageAspectRatio = '1:1' | '3:4' | '4:3' | '9:16' | '16:9';
+type ImageResolution = '1K' | '2K' | '4K';
+
+const GPT_IMAGE_2_SIZE_OPTIONS = [
+  { value: 'auto', label: 'Auto' },
+  { value: '1024x1024', label: '1024x1024 (Square)' },
+  { value: '1536x1024', label: '1536x1024 (Landscape)' },
+  { value: '1024x1536', label: '1024x1536 (Portrait)' },
+  { value: '2048x2048', label: '2048x2048 (2K Square)' },
+  { value: '2048x1152', label: '2048x1152 (2K Landscape)' },
+  { value: '3840x2160', label: '3840x2160 (4K Landscape)' },
+  { value: '2160x3840', label: '2160x3840 (4K Portrait)' },
+  { value: 'custom', label: 'Custom size' },
+] as const;
+
+type GptImage2Size = typeof GPT_IMAGE_2_SIZE_OPTIONS[number]['value'];
+
+const validateGptImage2Dimensions = (width: number, height: number) => {
+  if (!Number.isInteger(width) || !Number.isInteger(height) || width <= 0 || height <= 0) {
+    return 'Width and height must be positive whole numbers.';
+  }
+  if (width > 3840 || height > 3840) {
+    return 'Neither edge can exceed 3840px.';
+  }
+  if (width % 16 !== 0 || height % 16 !== 0) {
+    return 'Both edges must be multiples of 16px.';
+  }
+  if (Math.max(width, height) / Math.min(width, height) > 3) {
+    return 'The long-to-short edge ratio cannot exceed 3:1.';
+  }
+  const pixels = width * height;
+  if (pixels < 655_360 || pixels > 8_294_400) {
+    return 'Total pixels must be between 655,360 and 8,294,400.';
+  }
+  return '';
+};
+
+const isGptImageModel = (model: string) => /^gpt-image(?:-|$)/i.test(model.trim());
+
+const getOpenAiImageSize = (
+  model: string,
+  resolution: ImageResolution,
+  ratio: ImageAspectRatio,
+  gptImage2Size: GptImage2Size,
+  customWidth: number,
+  customHeight: number
+) => {
+  if (/^gpt-image-2(?:-|$)/i.test(model.trim())) {
+    if (gptImage2Size === 'custom') {
+      const validationError = validateGptImage2Dimensions(customWidth, customHeight);
+      if (validationError) throw new Error(`Invalid gpt-image-2 size: ${validationError}`);
+      return `${customWidth}x${customHeight}`;
+    }
+    return gptImage2Size;
+  }
+
+  if (ratio === '3:4' || ratio === '9:16') return '1024x1536';
+  if (ratio === '4:3' || ratio === '16:9') return '1536x1024';
+  return '1024x1024';
+};
+
 const getRandomPosition = () => ({
   x: Math.floor(Math.random() * 400) - 200,
   y: Math.floor(Math.random() * 400) - 200
@@ -447,15 +517,27 @@ const App: React.FC = () => {
   
   // Model and API Key State
   const [selectedModel, setSelectedModel] = useState<'gemini-2.5-flash-image' | 'gemini-3-pro-image-preview' | 'gemini-2.0-flash'>('gemini-2.5-flash-image');
-  const [aspectRatio, setAspectRatio] = useState<'1:1' | '3:4' | '4:3' | '9:16' | '16:9'>('1:1');
-  const [imageResolution, setImageResolution] = useState<'1K' | '2K' | '4K'>('1K');
+  const [aspectRatio, setAspectRatio] = useState<ImageAspectRatio>('1:1');
+  const [imageResolution, setImageResolution] = useState<ImageResolution>('1K');
+  const [gptImage2Size, setGptImage2Size] = useState<GptImage2Size>('auto');
+  const [gptImage2CustomWidth, setGptImage2CustomWidth] = useState(1024);
+  const [gptImage2CustomHeight, setGptImage2CustomHeight] = useState(1024);
   const [imageCount, setImageCount] = useState<number>(2);
   const [hasProKey, setHasProKey] = useState(false);
 
   // Custom API State
-  const [apiProvider, setApiProvider] = useState<'default' | 'gemini-custom' | 'openai-custom'>(
-    () => (localStorage.getItem('apiProvider') as any) || 'default'
-  );
+  const [apiProvider, setApiProvider] = useState<ApiProvider>(() => {
+    const saved = localStorage.getItem('apiProvider');
+    if (saved === 'gemini-custom' || saved === 'openai-custom') return saved;
+    return 'server';
+  });
+  const [serverAiConfig, setServerAiConfig] = useState<ServerAiConfig>({
+    configured: false,
+    provider: 'gemini',
+    model: '',
+    stream: false,
+  });
+  const [serverAiConfigError, setServerAiConfigError] = useState('');
   const [customGeminiKey, setCustomGeminiKey] = useState(
     () => localStorage.getItem('customGeminiKey') || ''
   );
@@ -478,6 +560,28 @@ const App: React.FC = () => {
   const [isApiConfigOpen, setIsApiConfigOpen] = useState(false);
   const [isModelDropdownOpen, setIsModelDropdownOpen] = useState(false);
   const [isToolsPanelOpen, setIsToolsPanelOpen] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    fetch('/api/ai/config')
+      .then(async response => {
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'Unable to load server AI configuration.');
+        return data as ServerAiConfig;
+      })
+      .then(config => {
+        if (!active) return;
+        setServerAiConfig(config);
+        setServerAiConfigError('');
+      })
+      .catch(error => {
+        if (!active) return;
+        setServerAiConfigError(error instanceof Error ? error.message : String(error));
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   useEffect(() => {
     localStorage.setItem('apiProvider', apiProvider);
@@ -971,11 +1075,16 @@ const App: React.FC = () => {
     ) => {
       const imageElements = selectedElements.filter(el => el.type === 'image' || el.type === 'drawing') as (ImageElement | DrawingElement)[];
       const annotationElements = selectedElements.filter(el => el.type === 'image' || el.type === 'drawing' || el.type === 'arrow' || el.type === 'label');
-      const noteElements = selectedElements.filter(el => el.type === 'note') as NoteElement[];
+      const textElements = selectedElements.filter(el => el.type === 'note' || el.type === 'label') as (NoteElement | LabelElement)[];
       const activeIframeElements = elements.filter(el => el.type === 'iframe' && el.isActivated) as IFrameElement[];
 
-      if (annotationElements.length === 0 && noteElements.length === 0 && activeIframeElements.length === 0) {
+      if (annotationElements.length === 0 && textElements.length === 0 && activeIframeElements.length === 0) {
           alert("Please select at least one element or activate a web page to provide context for generation.");
+          return;
+      }
+
+      if (apiProvider === 'server' && !serverAiConfig.configured) {
+          alert(serverAiConfigError || "The server AI_API_KEY is not configured.");
           return;
       }
 
@@ -984,8 +1093,7 @@ const App: React.FC = () => {
           return;
       }
 
-      const geminiApiKey = apiProvider === 'gemini-custom' ? customGeminiKey : process.env.API_KEY;
-      if (apiProvider !== 'openai-custom' && !geminiApiKey) {
+      if (apiProvider === 'gemini-custom' && !customGeminiKey) {
           alert("Gemini API key not available.");
           return;
       }
@@ -1063,7 +1171,7 @@ const App: React.FC = () => {
       };
 
       try {
-        let instructions = noteElements.map(note => note.content).join(' \n');
+        let instructions = textElements.map(element => element.content).join(' \n');
         const annotationAttachment = await createAnnotationAttachment(selectedElements);
         if (signal.aborted) return;
         setLastAnnotationPreview(annotationAttachment);
@@ -1075,9 +1183,31 @@ const App: React.FC = () => {
             instructions += `\n\n[Web Page Context]\n${iframeContext}\n(Note: You cannot access the web page directly, but use the URL and user's intent to inform the generation.)`;
         }
 
-        if (apiProvider === 'openai-custom') {
+        const useServerOpenAi = apiProvider === 'server' && serverAiConfig.provider === 'openai-compatible';
+        if (apiProvider === 'openai-custom' || useServerOpenAi) {
             const messages: any[] = [];
-            if (imageElements.length > 0 || annotationAttachment) {
+            const requestModel = useServerOpenAi ? serverAiConfig.model : openaiModel;
+            const requestStream = useServerOpenAi ? serverAiConfig.stream : openaiStream;
+            const useImageApi = isGptImageModel(requestModel);
+            const sourceImageUrls = imageElements.filter(el => el.src).map(el => el.src);
+            const hasImageInputs = sourceImageUrls.length > 0;
+            const inputImageUrls = annotationAttachment && hasImageInputs
+                ? [...sourceImageUrls, annotationAttachment]
+                : sourceImageUrls;
+            const generationPrompt = `Generate a completely new image based on this description: "${instructions}"`;
+            const editPrompt = annotationAttachment
+                ? `Using the clean source image(s) plus the annotated reference image, follow these instructions: "${instructions}". The annotated reference may contain arrows or visual text labels that indicate what area to edit; do not treat those markings as part of the desired final image unless the instructions explicitly say to keep them.`
+                : `Using the source image(s) as references, follow these instructions: "${instructions}"`;
+            const openaiSize = getOpenAiImageSize(
+                requestModel,
+                imageResolution,
+                aspectRatio,
+                gptImage2Size,
+                gptImage2CustomWidth,
+                gptImage2CustomHeight
+            );
+
+            if (hasImageInputs || annotationAttachment) {
                 const content: any[] = [
                     { type: "text", text: `Using the clean source image(s) plus the annotated reference image, follow these instructions: "${instructions}". The annotated reference may contain arrows or visual text labels that indicate what area to edit; do not treat those markings as part of the desired final image unless the instructions explicitly say to keep them.` }
                 ];
@@ -1098,35 +1228,57 @@ const App: React.FC = () => {
                 messages.push({ role: "user", content: `Generate a completely new image based on this description: "${instructions}"` });
             }
 
-            let openaiSize = "1024x1024";
-            if (imageResolution === '2K') openaiSize = "2048x2048";
-            if (imageResolution === '4K') openaiSize = "4096x4096";
 
             const generateSingleImageOpenAI = async () => {
-                const response = await fetch(`${openaiBaseUrl.replace(/\/$/, '')}/chat/completions`, {
+                const operation = hasImageInputs ? 'edits' : 'generations';
+                const endpoint = useImageApi
+                    ? (useServerOpenAi
+                        ? '/api/ai/openai/images/' + operation
+                        : openaiBaseUrl.replace(/\/$/, '') + '/images/' + operation)
+                    : (useServerOpenAi
+                        ? '/api/ai/openai/chat/completions'
+                        : openaiBaseUrl.replace(/\/$/, '') + '/chat/completions');
+                const requestBody = useImageApi
+                    ? {
+                        model: requestModel,
+                        prompt: hasImageInputs ? editPrompt : generationPrompt,
+                        ...(hasImageInputs ? {
+                            images: inputImageUrls.map(imageUrl => ({ image_url: imageUrl })),
+                        } : {}),
+                        size: openaiSize,
+                        n: 1,
+                        stream: requestStream,
+                    }
+                    : {
+                        model: requestModel,
+                        messages,
+                        size: openaiSize,
+                        n: 1,
+                        stream: requestStream,
+                    };
+                const response = await fetch(endpoint, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${openaiKey}`,
-                        ...(openaiStream ? { 'Accept': 'text/event-stream' } : {})
+                        ...(!useServerOpenAi ? { 'Authorization': 'Bearer ' + openaiKey } : {}),
+                        ...(requestStream ? { 'Accept': 'text/event-stream' } : {})
                     },
                     signal,
-                    body: JSON.stringify({
-                        model: openaiModel,
-                        messages: messages,
-                        size: openaiSize,
-                        n: 1, // Explicitly request 1 image per call to handle custom endpoints better
-                        ...(openaiStream ? { stream: true } : {})
-                    })
+                    body: JSON.stringify(requestBody)
                 });
                 if (!response.ok) {
-                    throw new Error(`OpenAI API error: ${response.statusText}`);
+                    const errorText = await response.text();
+                    let errorMessage = errorText || response.statusText;
+                    try {
+                        errorMessage = JSON.parse(errorText).error || errorMessage;
+                    } catch {}
+                    throw new Error('OpenAI API error: ' + errorMessage);
                 }
                 if (signal.aborted) return null;
 
-                const formatBase64 = (b64: string) => b64.startsWith('data:') ? b64 : `data:image/jpeg;base64,${b64}`;
+                const formatBase64 = (b64: string) => b64.startsWith('data:') ? b64 : `data:image/png;base64,${b64}`;
 
-                if (openaiStream) {
+                if (requestStream) {
                     const reader = response.body?.getReader();
                     const decoder = new TextDecoder("utf-8");
                     let contentStr = "";
@@ -1149,6 +1301,12 @@ const App: React.FC = () => {
                                                 contentStr += data.choices[0].delta.content;
                                             } else if (data.choices?.[0]?.delta?.image?.data) {
                                                 contentStr += data.choices[0].delta.image.data;
+                                            } else if (data.b64_json) {
+                                                contentStr = data.b64_json;
+                                            } else if (data.data?.[0]?.b64_json) {
+                                                contentStr = data.data[0].b64_json;
+                                            } else if (data.data?.[0]?.url) {
+                                                contentStr = data.data[0].url;
                                             }
                                         } catch (e) {
                                             // Handle potential JSON parse errors on incomplete chunks safely
@@ -1230,16 +1388,40 @@ const App: React.FC = () => {
             }
 
         } else {
-            // Default or Custom Gemini
-            const genAI = new GoogleGenAI({ apiKey: geminiApiKey as string });
+            // Server-managed or custom Gemini
+            const genAI = apiProvider === 'gemini-custom'
+                ? new GoogleGenAI({ apiKey: customGeminiKey })
+                : null;
 
             const commonConfig = {
                 responseModalities: [Modality.IMAGE, Modality.TEXT],
                 imageConfig: {
                     aspectRatio: aspectRatio,
                     imageSize: imageResolution
-                },
-                abortSignal: signal,
+                }
+            };
+
+            const generateGeminiContent = async (parts: any[]) => {
+                if (apiProvider === 'server') {
+                    const response = await fetch('/api/ai/gemini/generate', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        signal,
+                        body: JSON.stringify({
+                            model: serverAiConfig.model,
+                            contents: { parts },
+                            config: commonConfig,
+                        }),
+                    });
+                    const data = await response.json();
+                    if (!response.ok) throw new Error(data.error || 'Gemini server request failed.');
+                    return data;
+                }
+                return genAI!.models.generateContent({
+                    model: selectedModel,
+                    contents: { parts },
+                    config: { ...commonConfig, abortSignal: signal },
+                });
             };
 
             if (imageElements.length > 0 || annotationAttachment) { // Editing/Reimagining with existing images
@@ -1259,11 +1441,7 @@ const App: React.FC = () => {
                 const parts = [...imageParts, { text: promptText }];
                 
                 const generateSingleImage = async () => {
-                  const response = await genAI.models.generateContent({
-                      model: selectedModel,
-                      contents: { parts },
-                      config: commonConfig,
-                  });
+                  const response = await generateGeminiContent(parts);
                   if (signal.aborted) return null;
                   for (const part of response.candidates?.[0]?.content?.parts || []) {
                       if (part.inlineData) {
@@ -1289,11 +1467,7 @@ const App: React.FC = () => {
                 const promptText = `Generate a completely new image based on this description: "${instructions}"`;
 
                 const generateSingleImage = async () => {
-                    const response = await genAI.models.generateContent({
-                        model: selectedModel,
-                        contents: { parts: [{ text: promptText }] },
-                        config: commonConfig,
-                    });
+                    const response = await generateGeminiContent([{ text: promptText }]);
                     if (signal.aborted) return null;
                     for (const part of response.candidates?.[0]?.content?.parts || []) {
                         if (part.inlineData) {
@@ -1330,7 +1504,7 @@ const App: React.FC = () => {
       } finally {
         generationControllersRef.current.delete(taskId);
       }
-  }, [elements, selectedModel, aspectRatio, imageResolution, imageCount, apiProvider, customGeminiKey, openaiBaseUrl, openaiModel, openaiKey, openaiStream, setElements]);
+  }, [elements, selectedModel, aspectRatio, imageResolution, gptImage2Size, gptImage2CustomWidth, gptImage2CustomHeight, imageCount, apiProvider, serverAiConfig, serverAiConfigError, customGeminiKey, openaiBaseUrl, openaiModel, openaiKey, openaiStream, setElements]);
 
   const handleCreateGroup = useCallback((bounds: Bounds, inputElementIds: string[]) => {
       const groupId = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
@@ -1716,6 +1890,16 @@ const App: React.FC = () => {
 
   const contextMenuElement = contextMenu?.elementId ? elements.find(el => el.id === contextMenu.elementId) : null;
 
+  const activeOpenAiModel = apiProvider === 'openai-custom'
+    ? openaiModel
+    : apiProvider === 'server' && serverAiConfig.provider === 'openai-compatible'
+      ? serverAiConfig.model
+      : '';
+  const usesGptImage2 = /^gpt-image-2(?:-|$)/i.test(activeOpenAiModel.trim());
+  const gptImage2CustomSizeError = gptImage2Size === 'custom'
+    ? validateGptImage2Dimensions(gptImage2CustomWidth, gptImage2CustomHeight)
+    : '';
+
   return (
     <main className="relative w-screen h-[100dvh] overflow-hidden bg-gray-100 font-sans" onClick={() => setContextMenu(null)}>
       <button
@@ -1773,7 +1957,24 @@ const App: React.FC = () => {
         {/* Model Selection */}
         <div className="flex flex-col gap-2 p-3 bg-gray-50 rounded-lg border border-gray-100">
             <h2 className="text-sm font-bold text-gray-700 mb-1">AI Model</h2>
-            {apiProvider === 'openai-custom' ? (
+            {apiProvider === 'server' ? (
+                <div className="flex flex-col gap-1.5">
+                    <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-medium text-gray-700 truncate">
+                            {serverAiConfig.model || 'Not configured'}
+                        </span>
+                        <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ${serverAiConfig.configured ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
+                            {serverAiConfig.configured ? 'Server ready' : 'Needs .env'}
+                        </span>
+                    </div>
+                    <span className="text-[10px] text-gray-500">
+                        {serverAiConfig.provider === 'openai-compatible' ? 'OpenAI-compatible' : 'Gemini'} · managed by server
+                    </span>
+                    {serverAiConfigError && (
+                        <span className="text-[10px] text-red-600">{serverAiConfigError}</span>
+                    )}
+                </div>
+            ) : apiProvider === 'openai-custom' ? (
                 <div className="flex flex-col gap-1">
                     <select 
                         value={openaiModel}
@@ -1833,39 +2034,88 @@ const App: React.FC = () => {
                 </>
             )}
 
-            {/* Resolution Selector - Now available for all models */}
-            <div className="mt-2">
-                 <div className="flex justify-between items-center mb-1">
-                    <span className="text-xs font-semibold text-gray-600">Resolution</span>
+            {usesGptImage2 ? (
+                <div className="mt-2">
+                    <label htmlFor="gpt-image-2-size" className="mb-1 block text-xs font-semibold text-gray-600">
+                        Size
+                    </label>
+                    <select
+                        id="gpt-image-2-size"
+                        value={gptImage2Size}
+                        onChange={(e) => setGptImage2Size(e.target.value as GptImage2Size)}
+                        className="w-full rounded-md border border-gray-300 bg-white px-2 py-1.5 text-xs text-gray-700 focus:outline-none focus:ring-1 focus:ring-purple-500"
+                    >
+                        {GPT_IMAGE_2_SIZE_OPTIONS.map(option => (
+                            <option key={option.value} value={option.value}>{option.label}</option>
+                        ))}
+                    </select>
+                    {gptImage2Size === 'custom' && (
+                        <div className="mt-2">
+                            <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-1">
+                                <input
+                                    type="number"
+                                    aria-label="Custom image width"
+                                    min={16}
+                                    max={3840}
+                                    step={16}
+                                    value={gptImage2CustomWidth}
+                                    onChange={(e) => setGptImage2CustomWidth(Number(e.target.value))}
+                                    className="min-w-0 rounded-md border border-gray-300 bg-white px-2 py-1.5 text-xs text-gray-700 focus:outline-none focus:ring-1 focus:ring-purple-500"
+                                />
+                                <span className="text-xs text-gray-400">x</span>
+                                <input
+                                    type="number"
+                                    aria-label="Custom image height"
+                                    min={16}
+                                    max={3840}
+                                    step={16}
+                                    value={gptImage2CustomHeight}
+                                    onChange={(e) => setGptImage2CustomHeight(Number(e.target.value))}
+                                    className="min-w-0 rounded-md border border-gray-300 bg-white px-2 py-1.5 text-xs text-gray-700 focus:outline-none focus:ring-1 focus:ring-purple-500"
+                                />
+                            </div>
+                            {gptImage2CustomSizeError && (
+                                <p className="mt-1 text-[10px] leading-tight text-red-600">{gptImage2CustomSizeError}</p>
+                            )}
+                        </div>
+                    )}
                 </div>
-                <div className="grid grid-cols-3 gap-1">
-                    {(['1K', '2K', '4K'] as const).map(res => (
-                        <button 
-                            key={res}
-                            onClick={() => setImageResolution(res)}
-                            className={`px-1 py-1 text-[10px] rounded-md border transition-all ${imageResolution === res ? 'bg-purple-600 text-white border-purple-600' : 'bg-white text-gray-600 border-gray-300 hover:border-purple-400'}`}
-                        >
-                            {res}
-                        </button>
-                    ))}
+            ) : (
+                <div className="mt-2">
+                    <div className="flex justify-between items-center mb-1">
+                        <span className="text-xs font-semibold text-gray-600">Resolution</span>
+                    </div>
+                    <div className="grid grid-cols-3 gap-1">
+                        {(['1K', '2K', '4K'] as const).map(res => (
+                            <button
+                                key={res}
+                                onClick={() => setImageResolution(res)}
+                                className={`px-1 py-1 text-[10px] rounded-md border transition-all ${imageResolution === res ? 'bg-purple-600 text-white border-purple-600' : 'bg-white text-gray-600 border-gray-300 hover:border-purple-400'}`}
+                            >
+                                {res}
+                            </button>
+                        ))}
+                    </div>
                 </div>
-            </div>
+            )}
         </div>
 
         {/* Aspect Ratio Selection */}
         <div className="flex flex-col gap-2 p-3 bg-gray-50 rounded-lg border border-gray-100">
-            <h2 className="text-sm font-bold text-gray-700 mb-1">Aspect Ratio</h2>
-            <div className="grid grid-cols-3 gap-1">
-                {['1:1', '3:4', '4:3', '9:16', '16:9'].map(ratio => (
-                    <button 
-                        key={ratio}
-                        onClick={() => setAspectRatio(ratio as any)}
-                        className={`px-2 py-1.5 text-xs rounded-md border transition-all ${aspectRatio === ratio ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-300 hover:border-blue-400'}`}
-                    >
-                        {ratio}
-                    </button>
-                ))}
-            </div>
+            <h2 className="text-sm font-bold text-gray-700 mb-1">{usesGptImage2 ? 'Generation' : 'Aspect Ratio'}</h2>
+            {!usesGptImage2 && (
+                <div className="grid grid-cols-3 gap-1">
+                    {['1:1', '3:4', '4:3', '9:16', '16:9'].map(ratio => (
+                        <button
+                            key={ratio}
+                            onClick={() => setAspectRatio(ratio as ImageAspectRatio)}
+                            className={`px-2 py-1.5 text-xs rounded-md border transition-all ${aspectRatio === ratio ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-300 hover:border-blue-400'}`}
+                        >
+                            {ratio}
+                        </button>
+                    ))}
+                </div>
+            )}
 
             {/* Image Count Selection */}
             <div className="mt-2">
@@ -2052,11 +2302,29 @@ const App: React.FC = () => {
                   onChange={(e) => setApiProvider(e.target.value as any)}
                   className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
                 >
-                  <option value="default">Built-in API (Default)</option>
+                  <option value="server">Server API (.env)</option>
                   <option value="gemini-custom">Custom Gemini API</option>
                   <option value="openai-custom">Custom OpenAI API</option>
                 </select>
               </div>
+
+              {apiProvider === 'server' && (
+                <div className={`rounded-lg border p-3 text-sm ${serverAiConfig.configured ? 'border-green-200 bg-green-50' : 'border-amber-200 bg-amber-50'}`}>
+                  <div className="font-medium text-gray-800">
+                    {serverAiConfig.configured ? 'Server AI is ready' : 'Server AI needs configuration'}
+                  </div>
+                  <div className="mt-1 text-xs text-gray-600">
+                    Channel: {serverAiConfig.provider || 'unknown'}<br />
+                    Model: {serverAiConfig.model || 'not set'}
+                  </div>
+                  <div className="mt-2 text-xs text-gray-500">
+                    Edit the server's .env file and restart the server to change these values. The API key is never sent to this browser.
+                  </div>
+                  {serverAiConfigError && (
+                    <div className="mt-2 text-xs text-red-600">{serverAiConfigError}</div>
+                  )}
+                </div>
+              )}
 
               {apiProvider === 'gemini-custom' && (
                 <div>
