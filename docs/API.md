@@ -178,26 +178,31 @@ OpenAI-compatible 分支先根据模型名选择 API：
 }
 ```
 
-完整请求还会带 `model`、`size`、`n: 1` 和 `stream`。
+非 Gemini 图片模型的完整请求还会带 `model`、`size`、`n: 1` 和 `stream`。
 
-如果模型名匹配 Gemini 图片模型命名规则，即名称中是 `gemini-...image...` 或 `gemini-...imagen...`，OpenAI-compatible 的 chat 请求还会带：
+如果模型名匹配 Gemini 图片模型命名规则，即名称中是 `gemini-...image...` 或 `gemini-...imagen...`，OpenAI-compatible 的 chat 请求只发送：
 
 ```json
 {
-  "modalities": ["image", "text"]
+  "model": "gemini-3.1-flash-image",
+  "messages": [
+    { "role": "user", "content": "...含尺寸提示词..." }
+  ]
 }
 ```
 
-该分支不会自行添加 `image_config`；宽高比和分辨率通过 prompt 中的明确要求传递。
+该分支不会添加 `size`、`n`、`modalities`、`stream` 或 `image_config`；宽高比和分辨率通过 prompt 中的明确要求传递。服务端代理会再次按 `model + messages` 重建请求体，避免其他客户端把额外字段带给上游。
 
 ### 3.4 服务端转发与流式开关
 
-服务端代理会展开浏览器请求体，但强制覆盖：
+对于非 Gemini 图片模型，服务端代理会展开浏览器请求体，但强制覆盖：
 
 - `model`：必须是服务端白名单中的模型；
 - `stream`：以 `.env` 的 `AI_STREAM` 为准，而不是信任浏览器值。
 
-`AI_STREAM=true` 时，请求上游会加 `Accept: text/event-stream`。代理不解析返回内容，而是保留上游状态码、`Content-Type`、`Cache-Control`，并把响应 body 以流的方式直接 pipe 给浏览器。
+对于 Gemini 图片模型，服务端只向上游转发 `model` 和 `messages`，不会注入 `stream`。
+
+对于非 Gemini 图片模型，`AI_STREAM=true` 时请求上游会加 `Accept: text/event-stream`。代理不解析返回内容，而是保留上游状态码、`Content-Type`、`Cache-Control`，并把响应 body 以流的方式直接 pipe 给浏览器。Gemini 图片模型不会添加该请求头。
 
 `openai-custom` 模式的流式开关来自浏览器 `localStorage` 中的 `openaiStream`。
 
@@ -260,7 +265,7 @@ Output size requirement: Generate the final image at 2K resolution with a 16:9 a
 为忠实说明当前代码，除了 prompt 外，request body 里仍存在以下兼容参数：
 
 - Google GenAI SDK / Gemini 服务端代理：`imageConfig.aspectRatio`、`imageConfig.imageSize`；
-- OpenAI-compatible 所有分支：`size`。
+- OpenAI-compatible 非 Gemini 图片模型：`size`。
 
 `size` 的计算有模型差异：
 

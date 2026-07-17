@@ -33,6 +33,10 @@ const parseModelList = (value) => String(value || '')
   .map((model) => model.trim())
   .filter(Boolean);
 
+const isGeminiImageModel = (model) => /(?:^|\/)gemini-.*(?:image|imagen)(?:[-.:]|$)/i.test(
+  String(model || '').trim()
+);
+
 export const readAiConfig = (env = process.env) => {
   const provider = normalizeProvider(env.AI_PROVIDER);
   const apiKey = String(env.AI_API_KEY || '').trim();
@@ -112,18 +116,26 @@ export const createAiRouter = (env = process.env) => {
     if (!requestModel) return;
 
     try {
+      const requestBody = isGeminiImageModel(requestModel)
+        ? {
+            model: requestModel,
+            messages: req.body?.messages,
+          }
+        : {
+            ...req.body,
+            model: requestModel,
+            stream: config.stream,
+          };
       const upstream = await fetch(config.baseUrl + '/chat/completions', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': 'Bearer ' + config.apiKey,
-          ...(config.stream ? { 'Accept': 'text/event-stream' } : {}),
+          ...(!isGeminiImageModel(requestModel) && config.stream
+            ? { 'Accept': 'text/event-stream' }
+            : {}),
         },
-        body: JSON.stringify({
-          ...req.body,
-          model: requestModel,
-          stream: config.stream,
-        }),
+        body: JSON.stringify(requestBody),
       });
 
       res.status(upstream.status);

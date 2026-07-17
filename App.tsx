@@ -1387,7 +1387,8 @@ const App: React.FC = () => {
         if (apiProvider === 'openai-custom' || useServerOpenAi) {
             const messages: any[] = [];
             const requestModel = useServerOpenAi ? serverSelectedModel : openaiModel;
-            const requestStream = useServerOpenAi ? serverAiConfig.stream : openaiStream;
+            const requestStream = !isGeminiImageModel(requestModel)
+                && (useServerOpenAi ? serverAiConfig.stream : openaiStream);
             const useImageApi = isGptImageModel(requestModel);
             const sourceImageUrls = imageElements.filter(el => el.src).map(el => el.src);
             const hasImageInputs = sourceImageUrls.length > 0;
@@ -1458,12 +1459,14 @@ const App: React.FC = () => {
                         n: 1,
                         stream: requestStream,
                     }
+                    : isGeminiImageModel(requestModel)
+                    ? {
+                        model: requestModel,
+                        messages,
+                    }
                     : {
                         model: requestModel,
                         messages,
-                        ...(isGeminiImageModel(requestModel) ? {
-                            modalities: ['image', 'text'],
-                        } : {}),
                         size: openaiSize,
                         n: 1,
                         stream: requestStream,
