@@ -44,6 +44,11 @@ export const useHistoryState = <T>(initialState: T) => {
       setCurrentIndex(prevIndex => prevIndex + 1);
     }
   }, [canRedo]);
+
+  const replaceState = useCallback((nextState: T) => {
+    setHistory([nextState]);
+    setCurrentIndex(0);
+  }, []);
   
-  return { state, setState, undo, redo, canUndo, canRedo };
+  return { state, setState, replaceState, undo, redo, canUndo, canRedo };
 };

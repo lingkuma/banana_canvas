@@ -1,6 +1,7 @@
 import React, { useRef, useEffect, useState } from 'react';
 import type { Point, ElementType } from '../types';
 import { COLORS } from '../App';
+import { useI18n } from '../i18n';
 
 interface ContextMenuData {
     x: number;
@@ -41,6 +42,7 @@ const MenuItem: React.FC<{ onClick: () => void; children: React.ReactNode; disab
 );
 
 export const ContextMenu: React.FC<ContextMenuProps> = ({ menuData, onClose, actions, canChangeColor, elementType }) => {
+    const { t } = useI18n();
     const menuRef = useRef<HTMLDivElement>(null);
     const [colorSubMenuVisible, setColorSubMenuVisible] = useState(false);
 
@@ -98,7 +100,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ menuData, onClose, act
                     {elementType === 'drawing' && (
                          <>
                             <MenuItem onClick={() => handleAction(() => actions.editDrawing(menuData.elementId!))}>
-                                Edit Drawing
+                                {t('editDrawing')}
                             </MenuItem>
                              <div className="border-t my-1 border-gray-200" />
                         </>
@@ -106,7 +108,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ menuData, onClose, act
                     {(elementType === 'image' || elementType === 'drawing') && (
                         <>
                             <MenuItem onClick={() => handleAction(() => actions.downloadImage(menuData.elementId!))}>
-                                Download Image
+                                {t('downloadImage')}
                             </MenuItem>
                             <div className="border-t my-1 border-gray-200" />
                         </>
@@ -117,7 +119,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ menuData, onClose, act
                             disabled={!canChangeColor}
                             className="w-full flex justify-between items-center text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 disabled:text-gray-400 disabled:bg-transparent"
                         >
-                            <span>Change Color</span>
+                            <span>{t('changeColor')}</span>
                             <span className="text-xs">▶</span>
                         </button>
                          {colorSubMenuVisible && canChangeColor && (
@@ -131,7 +133,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ menuData, onClose, act
                                              key={color.name}
                                              onClick={() => handleAction(() => actions.changeColor(color.bg))}
                                              className={`w-6 h-6 rounded-full border-2 ${color.bg} border-white`}
-                                             aria-label={`Change color to ${color.name}`}
+                                             aria-label={t('changeColorTo', { color: color.name })}
                                          />
                                      ))}
                                  </div>
@@ -139,21 +141,21 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ menuData, onClose, act
                          )}
                     </div>
                     <div className="border-t my-1 border-gray-200" />
-                    <MenuItem onClick={() => handleAction(actions.copySelection)}>Copy</MenuItem>
+                    <MenuItem onClick={() => handleAction(actions.copySelection)}>{t('copy')}</MenuItem>
                     <div className="border-t my-1 border-gray-200" />
-                    <MenuItem onClick={() => handleAction(actions.bringToFront)}>↑ Bring to Front</MenuItem>
-                    <MenuItem onClick={() => handleAction(actions.sendToBack)}>↓ Send to Back</MenuItem>
+                    <MenuItem onClick={() => handleAction(actions.bringToFront)}>{t('bringToFront')}</MenuItem>
+                    <MenuItem onClick={() => handleAction(actions.sendToBack)}>{t('sendToBack')}</MenuItem>
                     <div className="border-t my-1 border-gray-200" />
-                    <MenuItem onClick={() => handleAction(actions.deleteElement)}>Delete</MenuItem>
+                    <MenuItem onClick={() => handleAction(actions.deleteElement)}>{t('delete')}</MenuItem>
                 </>
             ) : (
                 // Canvas Menu
                 <>
-                    <MenuItem onClick={() => handleAction(() => actions.addNote(menuData.worldPoint))}>Add Note</MenuItem>
-                    <MenuItem onClick={() => handleAction(() => actions.addArrow(menuData.worldPoint))}>Add Arrow</MenuItem>
-                    <MenuItem onClick={() => handleAction(() => actions.addLabel(menuData.worldPoint))}>Add Label</MenuItem>
-                    <MenuItem onClick={() => handleAction(() => actions.addDrawing(menuData.worldPoint))}>Add Drawing</MenuItem>
-                    <MenuItem onClick={() => handleAction(() => actions.addImage(menuData.worldPoint))}>Add Image</MenuItem>
+                    <MenuItem onClick={() => handleAction(() => actions.addNote(menuData.worldPoint))}>{t('addNote')}</MenuItem>
+                    <MenuItem onClick={() => handleAction(() => actions.addArrow(menuData.worldPoint))}>{t('addArrow')}</MenuItem>
+                    <MenuItem onClick={() => handleAction(() => actions.addLabel(menuData.worldPoint))}>{t('addLabel')}</MenuItem>
+                    <MenuItem onClick={() => handleAction(() => actions.addDrawing(menuData.worldPoint))}>{t('addDrawing')}</MenuItem>
+                    <MenuItem onClick={() => handleAction(() => actions.addImage(menuData.worldPoint))}>{t('addImage')}</MenuItem>
                 </>
             )}
         </div>

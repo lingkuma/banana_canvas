@@ -8,6 +8,18 @@ import { TrashModal } from './components/TrashModal';
 import { GenerationPanel } from './components/GenerationPanel';
 import type { CanvasElement, NoteElement, ImageElement, ArrowElement, LabelElement, DrawingElement, Point, ElementType, IFrameElement, GenerationItem, WorkflowGroup, Bounds } from './types';
 import { useHistoryState } from './useHistoryState';
+import { useI18n } from './i18n';
+import {
+  createCanvasSession,
+  deleteCanvasSession,
+  getActiveSessionId,
+  getCanvasSession,
+  listCanvasSessions,
+  saveCanvasSession,
+  setActiveSessionId as persistActiveSessionId,
+  type CanvasSession,
+  type CanvasSessionSummary,
+} from './canvasSessions';
 
 export const COLORS = [
   { name: 'Gray', bg: 'bg-gray-700', text: 'text-gray-700' },
@@ -20,11 +32,13 @@ export const COLORS = [
   { name: 'Pink', bg: 'bg-pink-500', text: 'text-pink-500' },
 ];
 
-const INITIAL_ELEMENTS: CanvasElement[] = [
-  { id: '1', type: 'note', position: { x: 100, y: 100 }, width: 180, height: 100, rotation: 0, zIndex: 1, content: 'Welcome! 👋\nCopyright: Prompt_case', color: 'bg-blue-600' },
-  { id: '2', type: 'note', position: { x: 350, y: 250 }, width: 200, height: 100, rotation: -10, zIndex: 2, content: 'Hold [SPACE] or Middle Mouse to Pan', color: 'bg-green-500' },
-  { id: '3', type: 'note', position: { x: -50, y: 350 }, width: 220, height: 100, rotation: 5, zIndex: 0, content: 'Right-click for options!\nDouble-click canvas to add a note.', color: 'bg-yellow-500' },
+const getInitialElements = (language: 'zh' | 'en'): CanvasElement[] => [
+  { id: '1', type: 'note', position: { x: 100, y: 100 }, width: 180, height: 100, rotation: 0, zIndex: 1, content: language === 'zh' ? '欢迎！👋\nCopyright: Prompt_case' : 'Welcome! 👋\nCopyright: Prompt_case', color: 'bg-blue-600' },
+  { id: '2', type: 'note', position: { x: 350, y: 250 }, width: 200, height: 100, rotation: -10, zIndex: 2, content: language === 'zh' ? '按住 [空格键] 或鼠标中键平移' : 'Hold [SPACE] or Middle Mouse to Pan', color: 'bg-green-500' },
+  { id: '3', type: 'note', position: { x: -50, y: 350 }, width: 220, height: 100, rotation: 5, zIndex: 0, content: language === 'zh' ? '右键打开选项！\n双击画布添加便签。' : 'Right-click for options!\nDouble-click canvas to add a note.', color: 'bg-yellow-500' },
 ];
+
+const INITIAL_ELEMENTS = getInitialElements('zh');
 
 interface ContextMenuData {
     x: number;
@@ -545,15 +559,21 @@ const getTextElementContent = (el: CanvasElement) => {
 };
 
 const App: React.FC = () => {
+  const { language, setLanguage, t } = useI18n();
   const { 
     state: elements, 
     setState: setElements, 
+    replaceState: replaceElements,
     undo, 
     redo, 
     canUndo, 
     canRedo 
   } = useHistoryState<CanvasElement[]>(INITIAL_ELEMENTS);
 
+  const [sessionSummaries, setSessionSummaries] = useState<CanvasSessionSummary[]>([]);
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+  const [sessionsReady, setSessionsReady] = useState(false);
+  const [sessionError, setSessionError] = useState('');
   const [selectedElementIds, setSelectedElementIds] = useState<string[]>([]);
   const [resetView, setResetView] = useState<() => void>(() => () => {});
   const [generationItems, setGenerationItems] = useState<GenerationItem[]>([]);
@@ -684,6 +704,130 @@ const App: React.FC = () => {
   const internalClipboardRef = useRef<InternalClipboardSnapshot | null>(null);
   const generationControllersRef = useRef<Map<string, AbortController>>(new Map());
   const zIndexCounter = useRef(INITIAL_ELEMENTS.length);
+  const sessionIdentityRef = useRef<Pick<CanvasSession, 'id' | 'name' | 'createdAt'> | null>(null);
+
+  const applyCanvasSession = useCallback((session: CanvasSession) => {
+    generationControllersRef.current.forEach(controller => controller.abort());
+    generationControllersRef.current.clear();
+    const restoredElements = session.elements.map(element => (
+      element.type === 'image' && element.workflowStatus === 'generating'
+        ? { ...element, workflowStatus: 'failed' as const }
+        : element
+    ));
+    const restoredGenerationItems = session.generationItems.map(item => (
+      item.status === 'generating' ? { ...item, status: 'failed' as const } : item
+    ));
+    const restoredWorkflowGroups = session.workflowGroups.map(group => (
+      group.status === 'generating' || group.status === 'waiting'
+        ? { ...group, status: 'failed' as const }
+        : group
+    ));
+    sessionIdentityRef.current = {
+      id: session.id,
+      name: session.name,
+      createdAt: session.createdAt,
+    };
+    replaceElements(restoredElements);
+    setGenerationItems(restoredGenerationItems);
+    setWorkflowGroups(restoredWorkflowGroups);
+    setTrashedElements(session.trashedElements);
+    setLastAnnotationPreview(session.lastAnnotationPreview);
+    setSelectedElementIds([]);
+    setActiveSelectionBounds(null);
+    setContextMenu(null);
+    setEditingDrawing(null);
+    setIsTrashModalOpen(false);
+    zIndexCounter.current = restoredElements.reduce((max, element) => Math.max(max, element.zIndex), 0) + 1;
+  }, [replaceElements]);
+
+  const getCurrentSessionSnapshot = useCallback((): CanvasSession | null => {
+    const identity = sessionIdentityRef.current;
+    if (!identity || identity.id !== currentSessionId) return null;
+    return {
+      ...identity,
+      elements,
+      generationItems,
+      workflowGroups,
+      trashedElements,
+      lastAnnotationPreview,
+      updatedAt: Date.now(),
+    };
+  }, [currentSessionId, elements, generationItems, workflowGroups, trashedElements, lastAnnotationPreview]);
+
+  useEffect(() => {
+    let active = true;
+    const initializeSessions = async () => {
+      try {
+        let summaries = await listCanvasSessions();
+        let session: CanvasSession | undefined;
+        const preferredId = getActiveSessionId();
+        if (preferredId) session = await getCanvasSession(preferredId);
+        if (!session && summaries.length > 0) session = await getCanvasSession(summaries[0].id);
+        if (!session) {
+          session = {
+            ...createCanvasSession('会话 1', INITIAL_ELEMENTS),
+            id: 'default',
+          };
+          await saveCanvasSession(session);
+          summaries = [{
+            id: session.id,
+            name: session.name,
+            createdAt: session.createdAt,
+            updatedAt: session.updatedAt,
+          }];
+        }
+        if (!active) return;
+        setSessionSummaries(summaries);
+        setCurrentSessionId(session.id);
+        persistActiveSessionId(session.id);
+        applyCanvasSession(session);
+        setSessionsReady(true);
+      } catch (error) {
+        if (!active) return;
+        console.error('Failed to initialize canvas sessions:', error);
+        setSessionError(error instanceof Error ? error.message : String(error));
+        setSessionsReady(true);
+      }
+    };
+    void initializeSessions();
+    return () => {
+      active = false;
+    };
+  }, [applyCanvasSession]);
+
+  useEffect(() => {
+    if (!sessionsReady || !currentSessionId) return;
+    const timeout = window.setTimeout(() => {
+      const session = getCurrentSessionSnapshot();
+      if (!session) return;
+      void saveCanvasSession(session)
+        .then(() => {
+          setSessionError('');
+          setSessionSummaries(prev => prev
+            .map(item => item.id === session.id ? {
+              id: session.id,
+              name: session.name,
+              createdAt: session.createdAt,
+              updatedAt: session.updatedAt,
+            } : item)
+            .sort((a, b) => b.updatedAt - a.updatedAt));
+        })
+        .catch(error => {
+          console.error('Failed to save canvas session:', error);
+          setSessionError(error instanceof Error ? error.message : String(error));
+        });
+    }, 150);
+    return () => window.clearTimeout(timeout);
+  }, [sessionsReady, currentSessionId, getCurrentSessionSnapshot]);
+
+  useEffect(() => {
+    const saveBeforeLeaving = () => {
+      const session = getCurrentSessionSnapshot();
+      if (session) void saveCanvasSession(session);
+    };
+    window.addEventListener('pagehide', saveBeforeLeaving);
+    return () => window.removeEventListener('pagehide', saveBeforeLeaving);
+  }, [getCurrentSessionSnapshot]);
   
   const checkProKey = useCallback(async () => {
     const hasKey = await window.aistudio.hasSelectedApiKey();
@@ -722,16 +866,16 @@ const App: React.FC = () => {
       width: 150,
       height: 100,
       rotation: 0,
-      content: 'New Note',
+      content: t('newNote'),
       color: COLORS[Math.floor(Math.random() * COLORS.length)].bg,
     });
-  }, [addElement]);
+  }, [addElement, t]);
 
   const addIFrame = useCallback((url: string, position?: Point) => {
     try {
         new URL(url);
     } catch (_) {
-        alert('Invalid URL provided.');
+        alert(t('invalidUrl'));
         return;
     }
 
@@ -745,7 +889,7 @@ const App: React.FC = () => {
         isActivated: false,
         sourceMode: 'viewport',
     });
-  }, [addElement]);
+  }, [addElement, t]);
   
   const addDrawing = useCallback((position?: Point) => {
     addElement({
@@ -802,12 +946,12 @@ const App: React.FC = () => {
       width: 220,
       height: 72,
       rotation: 0,
-      content: 'Label',
+      content: t('newLabel'),
       textColor: 'text-red-500',
       backgroundColor: 'transparent',
       fontSize: 24,
     });
-  }, [addElement]);
+  }, [addElement, t]);
   
   const triggerImageUpload = (position?: Point) => {
     lastImagePosition.current = position || null;
@@ -1133,22 +1277,22 @@ const App: React.FC = () => {
       const activeIframeElements = elements.filter(el => el.type === 'iframe' && el.isActivated) as IFrameElement[];
 
       if (annotationElements.length === 0 && textElements.length === 0 && activeIframeElements.length === 0) {
-          alert("Please select at least one element or activate a web page to provide context for generation.");
+          alert(t('selectGenerationContext'));
           return;
       }
 
       if (apiProvider === 'server' && !serverAiConfig.configured) {
-          alert(serverAiConfigError || "The server AI_API_KEY is not configured.");
+          alert(serverAiConfigError || t('serverKeyMissing'));
           return;
       }
 
       if (apiProvider === 'openai-custom' && !openaiKey) {
-          alert("OpenAI API key not available.");
+          alert(t('openAiKeyMissing'));
           return;
       }
 
       if (apiProvider === 'gemini-custom' && !customGeminiKey) {
-          alert("Gemini API key not available.");
+          alert(t('geminiKeyMissing'));
           return;
       }
 
@@ -1539,7 +1683,7 @@ const App: React.FC = () => {
       } finally {
         generationControllersRef.current.delete(taskId);
       }
-  }, [elements, selectedModel, aspectRatio, imageResolution, imageCount, apiProvider, serverAiConfig, serverSelectedModel, serverAiConfigError, customGeminiKey, openaiBaseUrl, openaiModel, openaiKey, openaiStream, setElements]);
+  }, [elements, selectedModel, aspectRatio, imageResolution, imageCount, apiProvider, serverAiConfig, serverSelectedModel, serverAiConfigError, customGeminiKey, openaiBaseUrl, openaiModel, openaiKey, openaiStream, setElements, t]);
 
   const handleCreateGroup = useCallback((bounds: Bounds, inputElementIds: string[]) => {
       const groupId = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
@@ -1909,9 +2053,97 @@ const App: React.FC = () => {
   const handleCopySelectionClick = useCallback(() => {
     void copySelectionToClipboard().catch(error => {
       console.error('Failed to copy selected canvas elements:', error);
-      alert('Failed to copy the current selection.');
+      alert(t('copySelectionFailed'));
     });
-  }, [copySelectionToClipboard]);
+  }, [copySelectionToClipboard, t]);
+
+  const handleSwitchSession = useCallback(async (nextSessionId: string) => {
+    if (!nextSessionId || nextSessionId === currentSessionId) return;
+    try {
+      const currentSession = getCurrentSessionSnapshot();
+      if (currentSession) await saveCanvasSession(currentSession);
+      const nextSession = await getCanvasSession(nextSessionId);
+      if (!nextSession) throw new Error(t('sessionNotFound'));
+      setCurrentSessionId(nextSession.id);
+      persistActiveSessionId(nextSession.id);
+      applyCanvasSession(nextSession);
+      setSessionError('');
+    } catch (error) {
+      console.error('Failed to switch canvas session:', error);
+      setSessionError(error instanceof Error ? error.message : String(error));
+    }
+  }, [currentSessionId, getCurrentSessionSnapshot, applyCanvasSession, t]);
+
+  const handleCreateSession = useCallback(async () => {
+    try {
+      const currentSession = getCurrentSessionSnapshot();
+      if (currentSession) await saveCanvasSession(currentSession);
+      const sessionPrefix = language === 'zh' ? '会话' : 'Session';
+      let sessionNumber = 1;
+      const usedNames = new Set(sessionSummaries.map(item => item.name));
+      while (usedNames.has(`${sessionPrefix} ${sessionNumber}`)) sessionNumber += 1;
+      const sessionName = `${sessionPrefix} ${sessionNumber}`;
+      const session = createCanvasSession(sessionName, getInitialElements(language));
+      await saveCanvasSession(session);
+      setSessionSummaries(prev => [{
+        id: session.id,
+        name: session.name,
+        createdAt: session.createdAt,
+        updatedAt: session.updatedAt,
+      }, ...prev]);
+      setCurrentSessionId(session.id);
+      persistActiveSessionId(session.id);
+      applyCanvasSession(session);
+      setSessionError('');
+    } catch (error) {
+      console.error('Failed to create canvas session:', error);
+      setSessionError(error instanceof Error ? error.message : String(error));
+    }
+  }, [getCurrentSessionSnapshot, sessionSummaries, applyCanvasSession, language]);
+
+  const handleRenameSession = useCallback(async () => {
+    const identity = sessionIdentityRef.current;
+    if (!identity || identity.id !== currentSessionId) return;
+    const nextName = prompt(t('renameSessionPrompt'), identity.name)?.trim();
+    if (!nextName || nextName === identity.name) return;
+    sessionIdentityRef.current = { ...identity, name: nextName };
+    const session = getCurrentSessionSnapshot();
+    if (!session) return;
+    try {
+      await saveCanvasSession(session);
+      setSessionSummaries(prev => prev.map(item => item.id === session.id ? {
+        ...item,
+        name: nextName,
+        updatedAt: session.updatedAt,
+      } : item));
+      setSessionError('');
+    } catch (error) {
+      console.error('Failed to rename canvas session:', error);
+      setSessionError(error instanceof Error ? error.message : String(error));
+    }
+  }, [currentSessionId, getCurrentSessionSnapshot, t]);
+
+  const handleDeleteSession = useCallback(async () => {
+    if (!currentSessionId || sessionSummaries.length <= 1) return;
+    const identity = sessionIdentityRef.current;
+    const sessionName = identity?.name ?? t('fallbackCurrentSession');
+    if (!confirm(t('confirmDeleteSession', { name: sessionName }))) return;
+    try {
+      const nextSummary = sessionSummaries.find(item => item.id !== currentSessionId);
+      if (!nextSummary) return;
+      const nextSession = await getCanvasSession(nextSummary.id);
+      if (!nextSession) throw new Error(t('sessionNotFound'));
+      await deleteCanvasSession(currentSessionId);
+      setSessionSummaries(prev => prev.filter(item => item.id !== currentSessionId));
+      setCurrentSessionId(nextSession.id);
+      persistActiveSessionId(nextSession.id);
+      applyCanvasSession(nextSession);
+      setSessionError('');
+    } catch (error) {
+      console.error('Failed to delete canvas session:', error);
+      setSessionError(error instanceof Error ? error.message : String(error));
+    }
+  }, [currentSessionId, sessionSummaries, applyCanvasSession, t]);
 
   const handleContextMenu = useCallback((e: React.MouseEvent, worldPoint: Point, elementId: string | null) => {
       e.preventDefault();
@@ -1934,19 +2166,19 @@ const App: React.FC = () => {
           setIsToolsPanelOpen(true);
         }}
         className="fixed left-3 top-3 z-30 md:hidden inline-flex h-11 items-center gap-2 rounded-lg border border-gray-200 bg-white/90 px-3 text-sm font-semibold text-gray-700 shadow-lg backdrop-blur-sm"
-        aria-label="Open tools panel"
+        aria-label={t('openTools')}
       >
         <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="currentColor" viewBox="0 0 16 16">
           <path fillRule="evenodd" d="M2.5 12a.5.5 0 0 1 .5-.5h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5m0-4a.5.5 0 0 1 .5-.5h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5m0-4a.5.5 0 0 1 .5-.5h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5"/>
         </svg>
-        Tools
+        {t('tools')}
       </button>
 
       {isToolsPanelOpen && (
         <button
           type="button"
           className="fixed inset-0 z-10 bg-black/20 md:hidden"
-          aria-label="Close tools panel"
+          aria-label={t('closeTools')}
           onClick={(e) => {
             e.stopPropagation();
             setIsToolsPanelOpen(false);
@@ -1958,20 +2190,38 @@ const App: React.FC = () => {
         <div className="flex items-start justify-between gap-3">
           <div>
           <h1 className="text-xl font-bold text-gray-800">Banana Canvas</h1>
-          <p className="text-sm text-gray-600 mt-1">Ver 3.0 • Creative Space</p>
+          <p className="text-sm text-gray-600 mt-1">Ver 3.0 • {t('creativeSpace')}</p>
+          <div className="mt-2 flex rounded-md border border-gray-200 bg-gray-100 p-0.5" role="group" aria-label={t('language')}>
+            <button
+              type="button"
+              onClick={() => setLanguage('zh')}
+              className={`flex-1 rounded px-2 py-1 text-xs font-medium transition-colors ${language === 'zh' ? 'bg-white text-purple-700 shadow-sm' : 'text-gray-500 hover:text-gray-800'}`}
+              aria-pressed={language === 'zh'}
+            >
+              {t('chinese')}
+            </button>
+            <button
+              type="button"
+              onClick={() => setLanguage('en')}
+              className={`flex-1 rounded px-2 py-1 text-xs font-medium transition-colors ${language === 'en' ? 'bg-white text-purple-700 shadow-sm' : 'text-gray-500 hover:text-gray-800'}`}
+              aria-pressed={language === 'en'}
+            >
+              {t('english')}
+            </button>
+          </div>
           <button 
             onClick={() => setIsApiConfigOpen(true)}
             className="mt-2 w-full px-2 py-1.5 text-xs bg-gray-100 text-gray-700 rounded border border-gray-200 hover:bg-gray-200 transition-colors flex items-center justify-center gap-1"
           >
             <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path><circle cx="12" cy="12" r="3"></circle></svg>
-            API Configuration
+            {t('apiConfiguration')}
           </button>
           </div>
           <button
             type="button"
             onClick={() => setIsToolsPanelOpen(false)}
             className="md:hidden -mr-1 -mt-1 inline-flex h-9 w-9 items-center justify-center rounded-lg text-gray-500 hover:bg-gray-100 hover:text-gray-800"
-            aria-label="Close tools panel"
+            aria-label={t('closeTools')}
           >
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="currentColor" viewBox="0 0 16 16">
               <path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 0 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708"/>
@@ -1979,9 +2229,59 @@ const App: React.FC = () => {
           </button>
         </div>
 
+        <section className="flex flex-col gap-2 rounded-lg border border-gray-200 bg-gray-50 p-3" aria-label={t('sessions')}>
+          <div className="flex items-center justify-between gap-2">
+            <h2 className="text-sm font-bold text-gray-700">{t('sessions')}</h2>
+            {!sessionsReady && <span className="text-[10px] text-gray-400">…</span>}
+          </div>
+          <select
+            value={currentSessionId ?? ''}
+            onChange={(event) => void handleSwitchSession(event.target.value)}
+            disabled={!sessionsReady || sessionSummaries.length === 0}
+            className="w-full rounded-md border border-gray-300 bg-white px-2 py-1.5 text-xs text-gray-700 focus:outline-none focus:ring-1 focus:ring-purple-500 disabled:bg-gray-100"
+            aria-label={t('sessions')}
+          >
+            {!currentSessionId && <option value="">{t('sessions')}</option>}
+            {sessionSummaries.map(session => (
+              <option key={session.id} value={session.id}>{session.name}</option>
+            ))}
+          </select>
+          <div className="grid grid-cols-3 gap-1">
+            <button
+              type="button"
+              onClick={() => void handleCreateSession()}
+              disabled={!sessionsReady}
+              className="rounded-md border border-gray-300 bg-white px-1 py-1.5 text-[10px] font-medium text-gray-700 hover:border-purple-400 hover:text-purple-700 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-400"
+            >
+              {t('newSession')}
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleRenameSession()}
+              disabled={!sessionsReady || !currentSessionId}
+              className="rounded-md border border-gray-300 bg-white px-1 py-1.5 text-[10px] font-medium text-gray-700 hover:border-purple-400 hover:text-purple-700 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-400"
+            >
+              {t('renameSession')}
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleDeleteSession()}
+              disabled={!sessionsReady || sessionSummaries.length <= 1}
+              className="rounded-md border border-gray-300 bg-white px-1 py-1.5 text-[10px] font-medium text-gray-700 hover:border-red-400 hover:text-red-600 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-400"
+            >
+              {t('deleteSession')}
+            </button>
+          </div>
+          {sessionError && (
+            <p className="text-[10px] leading-4 text-red-600" title={sessionError}>
+              {t('sessionPersistenceError')}: {sessionError}
+            </p>
+          )}
+        </section>
+
         {/* Model Selection */}
         <div className="flex flex-col gap-2 p-3 bg-gray-50 rounded-lg border border-gray-100">
-            <h2 className="text-sm font-bold text-gray-700 mb-1">AI Model</h2>
+            <h2 className="text-sm font-bold text-gray-700 mb-1">{t('aiModel')}</h2>
             {apiProvider === 'server' ? (
                 <div className="flex flex-col gap-1.5">
                     <div className="flex items-center justify-between gap-2">
@@ -1989,21 +2289,21 @@ const App: React.FC = () => {
                             value={serverSelectedModel}
                             onChange={(event) => setServerSelectedModel(event.target.value)}
                             disabled={serverAiConfig.models.length === 0}
-                            aria-label="Server AI model"
+                            aria-label={t('serverAiModel')}
                             className="min-w-0 flex-1 rounded-md border border-gray-300 bg-white px-2 py-1.5 text-xs text-gray-700 focus:outline-none focus:ring-1 focus:ring-purple-500 disabled:bg-gray-100"
                         >
                             {serverAiConfig.models.length === 0 ? (
-                                <option value="">Not configured</option>
+                                <option value="">{t('notConfigured')}</option>
                             ) : serverAiConfig.models.map(model => (
                                 <option key={model} value={model}>{model}</option>
                             ))}
                         </select>
                         <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ${serverAiConfig.configured ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
-                            {serverAiConfig.configured ? 'Server ready' : 'Needs .env'}
+                            {serverAiConfig.configured ? t('serverReady') : t('needsEnv')}
                         </span>
                     </div>
                     <span className="text-[10px] text-gray-500">
-                        {serverAiConfig.provider === 'openai-compatible' ? 'OpenAI-compatible' : 'Gemini'} · {serverAiConfig.models.length} model{serverAiConfig.models.length === 1 ? '' : 's'} available
+                        {serverAiConfig.provider === 'openai-compatible' ? 'OpenAI-compatible' : 'Gemini'} · {t('modelsAvailable', { count: serverAiConfig.models.length })}
                     </span>
                     {serverAiConfigError && (
                         <span className="text-[10px] text-red-600">{serverAiConfigError}</span>
@@ -2051,18 +2351,18 @@ const App: React.FC = () => {
                                 {hasProKey ? (
                                     <div className="flex items-center gap-1.5 text-[10px] text-green-600 font-medium">
                                         <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-                                        Pro Key Connected
-                                        <button onClick={handleOpenKeySelector} className="ml-auto text-blue-500 hover:underline">Switch</button>
+                                        {t('proKeyConnected')}
+                                        <button onClick={handleOpenKeySelector} className="ml-auto text-blue-500 hover:underline">{t('switch')}</button>
                                     </div>
                                 ) : (
                                     <button 
                                         onClick={handleOpenKeySelector}
                                         className="w-full px-3 py-1.5 text-xs bg-amber-500 text-white rounded-md hover:bg-amber-600 transition-colors flex items-center justify-center gap-1"
                                     >
-                                        <span>🔑 Connect Pro Key</span>
+                                        <span>🔑 {t('connectProKey')}</span>
                                     </button>
                                 )}
-                                <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noopener noreferrer" className="text-[10px] text-gray-400 mt-1 block hover:underline text-center">Billing Info</a>
+                                <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noopener noreferrer" className="text-[10px] text-gray-400 mt-1 block hover:underline text-center">{t('billingInfo')}</a>
                             </div>
                         </div>
                     )}
@@ -2071,7 +2371,7 @@ const App: React.FC = () => {
 
             <div className="mt-2">
                 <div className="flex justify-between items-center mb-1">
-                    <span className="text-xs font-semibold text-gray-600">Resolution</span>
+                    <span className="text-xs font-semibold text-gray-600">{t('resolution')}</span>
                 </div>
                 <div className="grid grid-cols-3 gap-1">
                     {(['1K', '2K', '4K'] as const).map(res => (
@@ -2089,7 +2389,7 @@ const App: React.FC = () => {
 
         {/* Aspect Ratio Selection */}
         <div className="flex flex-col gap-2 p-3 bg-gray-50 rounded-lg border border-gray-100">
-            <h2 className="text-sm font-bold text-gray-700 mb-1">Aspect Ratio</h2>
+            <h2 className="text-sm font-bold text-gray-700 mb-1">{t('aspectRatio')}</h2>
             <div className="grid grid-cols-3 gap-1">
                 {['1:1', '3:4', '4:3', '9:16', '16:9'].map(ratio => (
                     <button
@@ -2104,7 +2404,7 @@ const App: React.FC = () => {
 
             {/* Image Count Selection */}
             <div className="mt-2">
-                <h2 className="text-sm font-bold text-gray-700 mb-1">Number of Images</h2>
+                <h2 className="text-sm font-bold text-gray-700 mb-1">{t('numberOfImages')}</h2>
                 <div className="grid grid-cols-4 gap-1">
                     {[1, 2, 3, 4].map(count => (
                         <button 
@@ -2120,23 +2420,23 @@ const App: React.FC = () => {
         </div>
 
         <div className="grid grid-cols-2 gap-2">
-            <button onClick={() => addNote()} className="px-3 py-2 text-sm bg-blue-600 text-white rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-opacity-50 transition-colors">Add Note</button>
-            <button onClick={() => addArrow()} className="px-3 py-2 text-sm bg-green-600 text-white rounded-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-opacity-50 transition-colors">Add Arrow</button>
-            <button onClick={() => addLabel()} className="px-3 py-2 text-sm bg-red-600 text-white rounded-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-opacity-50 transition-colors">Add Label</button>
-            <button onClick={() => addDrawing()} className="px-3 py-2 text-sm bg-purple-600 text-white rounded-md hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-opacity-50 transition-colors">Add Drawing</button>
+            <button onClick={() => addNote()} className="px-3 py-2 text-sm bg-blue-600 text-white rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-opacity-50 transition-colors">{t('addNote')}</button>
+            <button onClick={() => addArrow()} className="px-3 py-2 text-sm bg-green-600 text-white rounded-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-opacity-50 transition-colors">{t('addArrow')}</button>
+            <button onClick={() => addLabel()} className="px-3 py-2 text-sm bg-red-600 text-white rounded-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-opacity-50 transition-colors">{t('addLabel')}</button>
+            <button onClick={() => addDrawing()} className="px-3 py-2 text-sm bg-purple-600 text-white rounded-md hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-opacity-50 transition-colors">{t('addDrawing')}</button>
             <button onClick={() => {
-                const url = prompt("Enter a web page URL to embed:", "https://");
+                const url = prompt(t('enterWebUrl'), "https://");
                 if (url) addIFrame(url);
-              }} className="px-3 py-2 text-sm bg-indigo-600 text-white rounded-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-opacity-50 transition-colors col-span-2">Add Web Page</button>
+              }} className="px-3 py-2 text-sm bg-indigo-600 text-white rounded-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-opacity-50 transition-colors col-span-2">{t('addWebPage')}</button>
             <label className="cursor-pointer px-3 py-2 text-sm text-center bg-orange-500 text-white rounded-md hover:bg-orange-600 focus:outline-none focus:ring-2 focus:ring-orange-500 focus:ring-opacity-50 transition-colors col-span-2">
-                Add Image(s)
+                {t('addImages')}
                 <input type="file" accept="image/*" ref={imageInputRef} className="hidden" onChange={handleImageUpload} multiple />
             </label>
         </div>
 
         {selectedElementIds.length > 0 && canChangeColor && (
             <div className="border-t pt-3 mt-1">
-                <h2 className="text-md font-semibold text-gray-700 mb-2">Color</h2>
+                <h2 className="text-md font-semibold text-gray-700 mb-2">{t('color')}</h2>
                 <div className="grid grid-cols-8 gap-1.5">
                     {COLORS.map(color => {
                         const finalColor = color.bg;
@@ -2145,26 +2445,26 @@ const App: React.FC = () => {
                                 key={color.name}
                                 onClick={() => handleColorChange(finalColor)}
                                 className={`w-6 h-6 rounded-full border-2 ${color.bg} border-white`}
-                                aria-label={`Change color to ${color.name}`}
+                                aria-label={t('changeColorTo', { color: color.name })}
                             />
                         )
                     })}
                 </div>
                 {canChangeLabelBackground && (
                     <div className="mt-3">
-                        <h3 className="text-xs font-semibold text-gray-600 mb-2">Label Background</h3>
+                        <h3 className="text-xs font-semibold text-gray-600 mb-2">{t('labelBackground')}</h3>
                         <div className="grid grid-cols-8 gap-1.5">
                             <button
                                 onClick={() => handleLabelBackgroundChange('transparent')}
                                 className="w-6 h-6 rounded-full border-2 border-dashed border-gray-400 bg-white"
-                                aria-label="Set label background to transparent"
+                                aria-label={t('transparentBackground')}
                             />
                             {COLORS.map(color => (
                                 <button
                                     key={color.name}
                                     onClick={() => handleLabelBackgroundChange(color.bg)}
                                     className={`w-6 h-6 rounded-full border-2 ${color.bg} border-white`}
-                                    aria-label={`Set label background to ${color.name}`}
+                                    aria-label={t('labelBackgroundColor', { color: color.name })}
                                 />
                             ))}
                         </div>
@@ -2174,16 +2474,16 @@ const App: React.FC = () => {
         )}
 
          <div className="flex flex-col gap-2 border-t pt-3 mt-3">
-            <h2 className="text-md font-semibold text-gray-700">Controls</h2>
+            <h2 className="text-md font-semibold text-gray-700">{t('controls')}</h2>
              <div className="grid grid-cols-2 gap-2">
-                <button onClick={undo} disabled={!canUndo} className="px-3 py-2 text-sm bg-gray-600 text-white rounded-md hover:bg-gray-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors">Undo</button>
-                <button onClick={redo} disabled={!canRedo} className="px-3 py-2 text-sm bg-gray-600 text-white rounded-md hover:bg-gray-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors">Redo</button>
+                <button onClick={undo} disabled={!canUndo} className="px-3 py-2 text-sm bg-gray-600 text-white rounded-md hover:bg-gray-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors">{t('undo')}</button>
+                <button onClick={redo} disabled={!canRedo} className="px-3 py-2 text-sm bg-gray-600 text-white rounded-md hover:bg-gray-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors">{t('redo')}</button>
             </div>
-             <button onClick={bringToFront} disabled={selectedElementIds.length === 0} className="px-3 py-2 text-sm bg-gray-700 text-white rounded-md hover:bg-gray-800 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors">↑ Bring to Front</button>
-             <button onClick={sendToBack} disabled={selectedElementIds.length === 0} className="px-3 py-2 text-sm bg-gray-500 text-white rounded-md hover:bg-gray-600 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors">↓ Send to Back</button>
-             <button onClick={handleCopySelectionClick} disabled={selectedElementIds.length === 0 && !activeSelectionBounds} className="px-3 py-2 text-sm bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors">Copy</button>
-             <button onClick={deleteElement} disabled={selectedElementIds.length === 0} className="px-3 py-2 text-sm bg-red-600 text-white rounded-md hover:bg-red-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors">Delete</button>
-            <button onClick={resetView} className="px-3 py-2 text-sm bg-gray-600 text-white rounded-md hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-opacity-50 transition-colors">Reset View</button>
+             <button onClick={bringToFront} disabled={selectedElementIds.length === 0} className="px-3 py-2 text-sm bg-gray-700 text-white rounded-md hover:bg-gray-800 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors">{t('bringToFront')}</button>
+             <button onClick={sendToBack} disabled={selectedElementIds.length === 0} className="px-3 py-2 text-sm bg-gray-500 text-white rounded-md hover:bg-gray-600 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors">{t('sendToBack')}</button>
+             <button onClick={handleCopySelectionClick} disabled={selectedElementIds.length === 0 && !activeSelectionBounds} className="px-3 py-2 text-sm bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors">{t('copy')}</button>
+             <button onClick={deleteElement} disabled={selectedElementIds.length === 0} className="px-3 py-2 text-sm bg-red-600 text-white rounded-md hover:bg-red-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors">{t('delete')}</button>
+            <button onClick={resetView} className="px-3 py-2 text-sm bg-gray-600 text-white rounded-md hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-opacity-50 transition-colors">{t('resetView')}</button>
             <button 
                 onClick={() => setIsTrashModalOpen(true)} 
                 className="relative mt-2 px-3 py-2 text-sm bg-gray-600 text-white rounded-md hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-opacity-50 transition-colors flex items-center justify-center gap-2"
@@ -2192,7 +2492,7 @@ const App: React.FC = () => {
                     <path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0z"/>
                     <path d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4zM2.5 3h11V2h-11z"/>
                 </svg>
-                <span>Trash</span>
+                <span>{t('trash')}</span>
                 {trashedElements.length > 0 && (
                     <span className="absolute -top-2 -right-2 bg-red-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
                         {trashedElements.length}
@@ -2277,34 +2577,34 @@ const App: React.FC = () => {
       {isApiConfigOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
           <div className="bg-white rounded-xl shadow-2xl p-6 w-[400px] max-w-[90vw]">
-            <h2 className="text-xl font-bold text-gray-800 mb-4">API Configuration</h2>
+            <h2 className="text-xl font-bold text-gray-800 mb-4">{t('apiConfiguration')}</h2>
             
             <div className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">API Provider</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">{t('apiProvider')}</label>
                 <select 
                   value={apiProvider}
                   onChange={(e) => setApiProvider(e.target.value as any)}
                   className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
                 >
-                  <option value="server">Server API (.env)</option>
-                  <option value="gemini-custom">Custom Gemini API</option>
-                  <option value="openai-custom">Custom OpenAI API</option>
+                  <option value="server">{t('serverApi')}</option>
+                  <option value="gemini-custom">{t('customGeminiApi')}</option>
+                  <option value="openai-custom">{t('customOpenAiApi')}</option>
                 </select>
               </div>
 
               {apiProvider === 'server' && (
                 <div className={`rounded-lg border p-3 text-sm ${serverAiConfig.configured ? 'border-green-200 bg-green-50' : 'border-amber-200 bg-amber-50'}`}>
                   <div className="font-medium text-gray-800">
-                    {serverAiConfig.configured ? 'Server AI is ready' : 'Server AI needs configuration'}
+                    {serverAiConfig.configured ? t('serverAiReady') : t('serverAiNeedsConfig')}
                   </div>
                   <div className="mt-1 text-xs text-gray-600">
-                    Channel: {serverAiConfig.provider || 'unknown'}<br />
-                    Default model: {serverAiConfig.model || 'not set'}<br />
-                    Available models: {serverAiConfig.models.join(', ') || 'none'}
+                    {t('channel')}: {serverAiConfig.provider || t('unknown')}<br />
+                    {t('defaultModel')}: {serverAiConfig.model || t('notSet')}<br />
+                    {t('availableModels')}: {serverAiConfig.models.join(', ') || t('none')}
                   </div>
                   <div className="mt-2 text-xs text-gray-500">
-                    Set AI_MODEL and AI_MODELS in the server's .env file, then restart the server. Each user can choose an allowed model without seeing the API key.
+                    {t('serverConfigHelp')}
                   </div>
                   {serverAiConfigError && (
                     <div className="mt-2 text-xs text-red-600">{serverAiConfigError}</div>
@@ -2314,7 +2614,7 @@ const App: React.FC = () => {
 
               {apiProvider === 'gemini-custom' && (
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Gemini API Key</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">{t('geminiApiKey')}</label>
                   <input 
                     type="password"
                     value={customGeminiKey}
@@ -2329,7 +2629,7 @@ const App: React.FC = () => {
               {apiProvider === 'openai-custom' && (
                 <>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Base URL</label>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">{t('baseUrl')}</label>
                     <input 
                       type="text"
                       value={openaiBaseUrl}
@@ -2342,7 +2642,7 @@ const App: React.FC = () => {
                     />
                   </div>
                   <div className="relative">
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Model Name</label>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">{t('modelName')}</label>
                     <div className="relative">
                         <input 
                             type="text"
@@ -2383,7 +2683,7 @@ const App: React.FC = () => {
                                         type="button"
                                         onMouseDown={(e) => handleDeleteModel(e, model)}
                                         className="text-gray-400 hover:text-red-500 p-1 rounded-full hover:bg-gray-200 transition-colors"
-                                        title="Delete saved model"
+                                        title={t('deleteSavedModel')}
                                     >
                                         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16">
                                             <path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 0 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708z"/>
@@ -2395,7 +2695,7 @@ const App: React.FC = () => {
                     )}
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">API Key</label>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">{t('apiKey')}</label>
                     <input 
                       type="password"
                       value={openaiKey}
@@ -2414,7 +2714,7 @@ const App: React.FC = () => {
                       className="w-4 h-4 text-purple-600 rounded border-gray-300 focus:ring-purple-500"
                     />
                     <label htmlFor="openai-stream-toggle" className="text-sm font-medium text-gray-700">
-                      Enable Stream
+                      {t('enableStream')}
                     </label>
                   </div>
                 </>
@@ -2426,7 +2726,7 @@ const App: React.FC = () => {
                 onClick={handleCloseApiConfig}
                 className="px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700 transition-colors"
               >
-                Done
+                {t('done')}
               </button>
             </div>
           </div>

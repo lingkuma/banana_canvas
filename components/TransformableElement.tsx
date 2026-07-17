@@ -1,6 +1,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import type { CanvasElement, Point, ArrowElement } from '../types';
+import { useI18n } from '../i18n';
 
 interface TransformableElementProps {
   element: CanvasElement;
@@ -53,6 +54,7 @@ const getResizeHandleCursor = (handle: string): string => {
 
 
 export const TransformableElement: React.FC<TransformableElementProps> = ({ element, isSelected, zoom, onSelect, onUpdate, onInteractionEnd, onContextMenu, onEditDrawing, onTrashElement }) => {
+  const { t } = useI18n();
   const [interaction, setInteraction] = useState<Interaction>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -294,11 +296,11 @@ export const TransformableElement: React.FC<TransformableElementProps> = ({ elem
                 setCopied(true);
                 setTimeout(() => setCopied(false), 2000);
             });
-            alert('Failed to fetch full page content. Copied URL instead.');
+            alert(t('failedCopyFullPage'));
         } finally {
             setIsCopying(false);
         }
-    }, [element]);
+    }, [element, t]);
 
     return (
         <div
@@ -343,7 +345,7 @@ export const TransformableElement: React.FC<TransformableElementProps> = ({ elem
                                       pointerEvents: isEditing ? 'auto' : 'none',
                                       overflow: isEditing ? 'auto' : 'hidden',
                                     }}
-                                    placeholder="Write..."
+                                    placeholder={t('writePlaceholder')}
                                 />
                             </div>
                         );
@@ -368,7 +370,7 @@ export const TransformableElement: React.FC<TransformableElementProps> = ({ elem
                                       pointerEvents: isEditing ? 'auto' : 'none',
                                       overflow: isEditing ? 'auto' : 'hidden',
                                     }}
-                                    placeholder="Label..."
+                                    placeholder={t('labelPlaceholder')}
                                 />
                             </div>
                         );
@@ -383,12 +385,12 @@ export const TransformableElement: React.FC<TransformableElementProps> = ({ elem
                                         ? 'bg-red-500'
                                         : 'bg-gray-400';
                             const label = status === 'completed'
-                                ? 'Generated'
+                                ? t('generated')
                                 : status === 'generating'
-                                    ? 'Generating'
+                                    ? t('generating')
                                     : status === 'failed'
-                                        ? 'Failed'
-                                        : 'Ready';
+                                        ? t('failed')
+                                        : t('ready');
 
                             return (
                                 <div style={style} className="relative shadow-lg rounded-md overflow-visible bg-white border border-gray-200">
@@ -396,25 +398,25 @@ export const TransformableElement: React.FC<TransformableElementProps> = ({ elem
                                         {label}
                                     </div>
                                     {el.src ? (
-                                        <img src={el.src} alt="Workflow output" className="w-full h-full rounded-md object-cover" draggable="false" />
+                                        <img src={el.src} alt={t('workflowOutput')} className="w-full h-full rounded-md object-cover" draggable="false" />
                                     ) : (
                                         <div className="w-full h-full rounded-md border-2 border-dashed border-gray-300 bg-gray-50 flex items-center justify-center text-xs font-medium text-gray-400">
-                                            Output
+                                            {t('output')}
                                         </div>
                                     )}
                                 </div>
                             );
                         }
                         return (
-                            <img src={el.src} alt="User upload" style={style} className="shadow-lg rounded-md object-cover" draggable="false" />
+                            <img src={el.src} alt={t('userUpload')} style={style} className="shadow-lg rounded-md object-cover" draggable="false" />
                         );
                     case 'drawing':
                         return (
                             <div style={style} className="bg-white shadow-md rounded-lg flex items-center justify-center border border-gray-200">
                                 {el.src ? (
-                                    <img src={el.src} alt="User drawing" style={style} className="rounded-lg object-contain" draggable="false" />
+                                    <img src={el.src} alt={t('userDrawing')} style={style} className="rounded-lg object-contain" draggable="false" />
                                 ) : (
-                                    <span className="text-gray-400 p-2 text-center">Double-click to draw</span>
+                                    <span className="text-gray-400 p-2 text-center">{t('doubleClickDraw')}</span>
                                 )}
                             </div>
                         );
@@ -425,7 +427,7 @@ export const TransformableElement: React.FC<TransformableElementProps> = ({ elem
                                     <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="currentColor" className="opacity-50" viewBox="0 0 16 16"><path d="M16 8.049c0-4.446-3.582-8.05-8-8.05C3.58 0-.002 3.603-.002 8.05c0 4.017 2.926 7.347 6.75 7.951v-5.625h-2.03V8.05H6.75V6.275c0-2.017 1.195-3.131 3.022-3.131.876 0 1.791.157 1.791.157v1.98h-1.009c-.993 0-1.303.621-1.303 1.258v1.51h2.218l-.354 2.326H9.25V16c3.824-.604 6.75-3.934 6.75-7.951"/></svg>
                                     <span className="truncate flex-grow">{el.url}</span>
                                     <button
-                                        title={`AI Source: ${el.sourceMode}`}
+                                        title={t('aiSource', { mode: el.sourceMode })}
                                         onClick={(e) => {
                                             e.stopPropagation();
                                             onUpdate({ ...el, sourceMode: el.sourceMode === 'viewport' ? 'fullpage' : 'viewport' });
@@ -438,7 +440,7 @@ export const TransformableElement: React.FC<TransformableElementProps> = ({ elem
                                         }
                                     </button>
                                     <button
-                                        title={el.isActivated ? "Deactivate for AI" : "Activate for AI"}
+                                        title={el.isActivated ? t('deactivateForAi') : t('activateForAi')}
                                         onClick={(e) => {
                                             e.stopPropagation();
                                             onUpdate({ ...el, isActivated: !el.isActivated });
@@ -448,7 +450,7 @@ export const TransformableElement: React.FC<TransformableElementProps> = ({ elem
                                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="currentColor" viewBox="0 0 16 16"><path d="M6 .278a.77.77 0 0 1 .08.858 7.2 7.2 0 0 0-.878 3.46c0 4.021 3.278 7.277 7.318 7.277q.792-.001 1.567-.123a.77.77 0 0 1 .81.316.77.77 0 0 1-.031.893A8.7 8.7 0 0 1 8.942 16a8.7 8.7 0 0 1-8.6-9.43L1.24 2.27a.77.77 0 0 1 .632-.676l2.84-1.135a.77.77 0 0 1 .805.106zM8 15A7 7 0 0 0 8 1s1.095 1.248 1.597 2.458A6.9 6.9 0 0 1 8 15"/></svg>
                                     </button>
                                     <button
-                                        title="Copy AI Context"
+                                        title={t('copyAiContext')}
                                         onClick={handleCopyContent}
                                         className="p-1 rounded hover:bg-gray-600"
                                         disabled={isCopying}
@@ -465,7 +467,7 @@ export const TransformableElement: React.FC<TransformableElementProps> = ({ elem
                                         )}
                                     </button>
                                     <button
-                                        title="Close"
+                                        title={t('close')}
                                         onClick={(e) => { e.stopPropagation(); onTrashElement(el.id); }}
                                         className="p-1 rounded hover:bg-red-500"
                                     >
@@ -478,7 +480,7 @@ export const TransformableElement: React.FC<TransformableElementProps> = ({ elem
                                         className="w-full h-full border-none"
                                         style={{ pointerEvents: interaction ? 'none' : 'auto' }}
                                         sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
-                                        title="Embedded Web Page"
+                                        title={t('embeddedWebPage')}
                                     />
                                 </div>
                             </div>

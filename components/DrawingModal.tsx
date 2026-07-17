@@ -1,5 +1,6 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import type { DrawingElement, Point } from '../types';
+import { useI18n } from '../i18n';
 
 interface DrawingModalProps {
   element: DrawingElement;
@@ -16,6 +17,7 @@ const CANVAS_INTERNAL_HEIGHT = 900;
 
 
 export const DrawingModal: React.FC<DrawingModalProps> = ({ element, onSave, onClose }) => {
+  const { t } = useI18n();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const contextRef = useRef<CanvasRenderingContext2D | null>(null);
   const [isDrawing, setIsDrawing] = useState(false);
@@ -195,24 +197,24 @@ export const DrawingModal: React.FC<DrawingModalProps> = ({ element, onSave, onC
     <div className="absolute inset-0 z-40 bg-black/60 flex items-center justify-center p-4" onClick={onClose}>
       <div className="bg-white rounded-lg shadow-2xl w-full max-w-7xl h-[95vh] flex flex-col" onClick={e => e.stopPropagation()}>
         <div className="p-4 border-b flex justify-between items-center bg-gray-50 rounded-t-lg flex-shrink-0">
-          <h2 className="text-xl font-bold text-gray-800">Drawing Pad</h2>
-          <button onClick={onClose} className="text-gray-500 hover:text-gray-800 text-2xl leading-none">&times;</button>
+          <h2 className="text-xl font-bold text-gray-800">{t('drawingPad')}</h2>
+          <button onClick={onClose} className="text-gray-500 hover:text-gray-800 text-2xl leading-none" aria-label={t('close')}>&times;</button>
         </div>
 
         <div className="p-2 border-b flex flex-wrap items-center gap-4 bg-gray-100 flex-shrink-0">
             {/* Tools */}
             <div className="flex items-center gap-2">
-                <button onClick={() => setTool('pencil')} className={`p-2 rounded ${tool === 'pencil' ? 'bg-blue-500 text-white' : 'bg-white hover:bg-gray-200'}`}>Pencil</button>
-                <button onClick={() => setTool('eraser')} className={`p-2 rounded ${tool === 'eraser' ? 'bg-blue-500 text-white' : 'bg-white hover:bg-gray-200'}`}>Eraser</button>
+                <button onClick={() => setTool('pencil')} className={`p-2 rounded ${tool === 'pencil' ? 'bg-blue-500 text-white' : 'bg-white hover:bg-gray-200'}`}>{t('pencil')}</button>
+                <button onClick={() => setTool('eraser')} className={`p-2 rounded ${tool === 'eraser' ? 'bg-blue-500 text-white' : 'bg-white hover:bg-gray-200'}`}>{t('eraser')}</button>
             </div>
             {/* Undo/Redo */}
             <div className="flex items-center gap-2 pl-2 border-l border-gray-300">
-                <button onClick={undo} disabled={!canUndo} className={`p-2 rounded ${!canUndo ? 'bg-gray-200 text-gray-500 cursor-not-allowed' : 'bg-white hover:bg-gray-200'}`}>Undo</button>
-                <button onClick={redo} disabled={!canRedo} className={`p-2 rounded ${!canRedo ? 'bg-gray-200 text-gray-500 cursor-not-allowed' : 'bg-white hover:bg-gray-200'}`}>Redo</button>
+                <button onClick={undo} disabled={!canUndo} className={`p-2 rounded ${!canUndo ? 'bg-gray-200 text-gray-500 cursor-not-allowed' : 'bg-white hover:bg-gray-200'}`}>{t('undo')}</button>
+                <button onClick={redo} disabled={!canRedo} className={`p-2 rounded ${!canRedo ? 'bg-gray-200 text-gray-500 cursor-not-allowed' : 'bg-white hover:bg-gray-200'}`}>{t('redo')}</button>
             </div>
             {/* Brush Size */}
             <div className="flex items-center gap-2">
-                <span className="text-sm font-medium text-gray-700">Size:</span>
+                <span className="text-sm font-medium text-gray-700">{t('size')}</span>
                 {BRUSH_SIZES.map(size => (
                     <button key={size} onClick={() => setBrushSize(size)} className={`w-8 h-8 rounded-full flex items-center justify-center ${brushSize === size ? 'ring-2 ring-blue-500' : ''} bg-gray-200`}>
                         <span className="block rounded-full bg-black" style={{ width: size, height: size }}></span>
@@ -221,7 +223,7 @@ export const DrawingModal: React.FC<DrawingModalProps> = ({ element, onSave, onC
             </div>
             {/* Color */}
             <div className="flex items-center gap-2">
-                <span className="text-sm font-medium text-gray-700">Color:</span>
+                <span className="text-sm font-medium text-gray-700">{t('color')}：</span>
                 {COLORS.map(c => (
                      <button key={c} onClick={() => setColor(c)} className={`w-8 h-8 rounded-full border-2 ${color === c ? 'ring-2 ring-blue-500 ring-offset-1' : 'border-gray-300'}`} style={{ backgroundColor: c }} />
                 ))}
@@ -234,7 +236,7 @@ export const DrawingModal: React.FC<DrawingModalProps> = ({ element, onSave, onC
                     )}
                 </div>
             </div>
-             <button onClick={clearCanvas} className="ml-auto p-2 rounded bg-red-500 text-white hover:bg-red-600">Clear</button>
+             <button onClick={clearCanvas} className="ml-auto p-2 rounded bg-red-500 text-white hover:bg-red-600">{t('clear')}</button>
         </div>
         
         <div className="flex-grow p-4 bg-gray-200 flex items-center justify-center overflow-auto">
@@ -250,8 +252,8 @@ export const DrawingModal: React.FC<DrawingModalProps> = ({ element, onSave, onC
         </div>
 
         <div className="p-4 border-t flex justify-end gap-2 bg-gray-50 rounded-b-lg flex-shrink-0">
-          <button onClick={onClose} className="px-4 py-2 text-sm bg-gray-200 text-gray-800 rounded-md hover:bg-gray-300">Cancel</button>
-          <button onClick={handleSave} className="px-4 py-2 text-sm bg-blue-600 text-white rounded-md hover:bg-blue-700">Save Drawing</button>
+          <button onClick={onClose} className="px-4 py-2 text-sm bg-gray-200 text-gray-800 rounded-md hover:bg-gray-300">{t('cancel')}</button>
+          <button onClick={handleSave} className="px-4 py-2 text-sm bg-blue-600 text-white rounded-md hover:bg-blue-700">{t('saveDrawing')}</button>
         </div>
       </div>
     </div>

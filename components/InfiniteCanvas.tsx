@@ -2,6 +2,7 @@
 import React, { useState, useRef, useCallback, useEffect, useMemo, forwardRef, useImperativeHandle } from 'react';
 import type { Point, CanvasElement, Bounds, WorkflowGroup } from '../types';
 import { TransformableElement } from './TransformableElement';
+import { useI18n } from '../i18n';
 
 interface InfiniteCanvasProps {
   elements: CanvasElement[];
@@ -148,6 +149,7 @@ export const InfiniteCanvas = forwardRef<CanvasApi, InfiniteCanvasProps>(({
   onCanvasDoubleClick,
   onTrashElement
 }, ref) => {
+  const { t } = useI18n();
   const [pan, setPan] = useState<Point>({ x: 0, y: 0 });
   const [zoom, setZoom] = useState(1);
   const [isPanning, setIsPanning] = useState(false);
@@ -707,7 +709,7 @@ export const InfiniteCanvas = forwardRef<CanvasApi, InfiniteCanvasProps>(({
           >
             <div className="absolute -top-8 right-0 flex items-center gap-1 pointer-events-auto">
               <button
-                title="Move group"
+                title={t('moveGroup')}
                 className="w-7 h-7 text-xs font-semibold bg-white text-gray-700 border border-gray-300 rounded shadow hover:bg-gray-100 cursor-move flex items-center justify-center"
                 onPointerDown={(e) => startGroupInteraction(e, group, 'move')}
               >
@@ -723,7 +725,7 @@ export const InfiniteCanvas = forwardRef<CanvasApi, InfiniteCanvasProps>(({
                 }}
                 disabled={group.status === 'generating' || group.status === 'waiting'}
               >
-                Start
+                {t('start')}
               </button>
               <button
                 className="px-2 py-1 text-[11px] font-semibold bg-white text-gray-700 border border-gray-300 rounded shadow hover:bg-gray-100"
@@ -732,7 +734,7 @@ export const InfiniteCanvas = forwardRef<CanvasApi, InfiniteCanvasProps>(({
                   onUngroup(group.id);
                 }}
               >
-                Ungroup
+                {t('ungroup')}
               </button>
             </div>
             {(['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'] as const).map(handle => (
@@ -769,13 +771,13 @@ export const InfiniteCanvas = forwardRef<CanvasApi, InfiniteCanvasProps>(({
                 onClick={handleGenerateClick}
                 className="px-4 py-2 text-sm bg-purple-600 text-white rounded-lg shadow-lg hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-opacity-50 transition-all transform hover:scale-105 disabled:bg-gray-400 disabled:scale-100 disabled:cursor-wait"
             >
-                Generate
+                {t('generate')}
             </button>
             <button
                 onClick={handleCreateGroupClick}
                 className="ml-2 px-4 py-2 text-sm bg-blue-600 text-white rounded-lg shadow-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-opacity-50 transition-all transform hover:scale-105"
             >
-                Group
+                {t('group')}
             </button>
           </div>
       )}
@@ -795,7 +797,7 @@ export const InfiniteCanvas = forwardRef<CanvasApi, InfiniteCanvasProps>(({
       {isDraggingOver && (
           <div className="absolute inset-0 bg-blue-500/10 border-4 border-dashed border-blue-500 pointer-events-none z-50 flex items-center justify-center">
               <div className="text-blue-500 text-2xl font-bold bg-white/80 p-4 rounded-lg shadow-lg">
-                  Drop images or URLs to add
+                  {t('dropToAdd')}
               </div>
           </div>
       )}
