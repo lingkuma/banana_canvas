@@ -184,15 +184,11 @@ OpenAI-compatible 分支先根据模型名选择 API：
 
 ```json
 {
-  "modalities": ["image", "text"],
-  "image_config": {
-    "aspect_ratio": "1:1",
-    "image_size": "1K"
-  }
+  "modalities": ["image", "text"]
 }
 ```
 
-这只是 OpenAI-compatible 中转协议的兼容字段；它和 Google GenAI SDK 使用的 camelCase `imageConfig` 不是同一个请求格式。
+该分支不会自行添加 `image_config`；宽高比和分辨率通过 prompt 中的明确要求传递。
 
 ### 3.4 服务端转发与流式开关
 
@@ -222,9 +218,9 @@ OpenAI-compatible 分支先根据模型名选择 API：
 
 ### 4.1 当前中转的限制
 
-当前实际使用的中转服务不支持可靠地通过 `size`、`image_config` 或 Gemini `imageConfig` 等请求参数控制尺寸。因此，在当前部署中，**尺寸控制只能依赖写入 prompt 的明确文字要求**。
+当前实际使用的中转服务不支持可靠地通过 `size` 或 Gemini `imageConfig` 等请求参数控制尺寸。因此，在当前部署中，**尺寸控制只能依赖写入 prompt 的明确文字要求**。
 
-代码仍会保留并发送上述结构化字段，以兼容官方端点或其他支持这些字段的中转；但在当前中转上不能把这些字段视为有效保证。真正必须存在的是下面的 prompt 后缀。
+代码只在对应协议原本支持的分支保留结构化字段；但在当前中转上不能把这些字段视为有效保证。真正必须存在的是下面的 prompt 后缀。
 
 ### 4.2 追加时机和精确格式
 
@@ -264,7 +260,6 @@ Output size requirement: Generate the final image at 2K resolution with a 16:9 a
 为忠实说明当前代码，除了 prompt 外，request body 里仍存在以下兼容参数：
 
 - Google GenAI SDK / Gemini 服务端代理：`imageConfig.aspectRatio`、`imageConfig.imageSize`；
-- OpenAI-compatible Gemini 图片模型：`image_config.aspect_ratio`、`image_config.image_size`；
 - OpenAI-compatible 所有分支：`size`。
 
 `size` 的计算有模型差异：

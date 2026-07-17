@@ -1463,10 +1463,6 @@ const App: React.FC = () => {
                         messages,
                         ...(isGeminiImageModel(requestModel) ? {
                             modalities: ['image', 'text'],
-                            image_config: {
-                                aspect_ratio: aspectRatio,
-                                image_size: imageResolution,
-                            },
                         } : {}),
                         size: openaiSize,
                         n: 1,
