@@ -50,65 +50,50 @@ interface ServerAiConfig {
 type ImageAspectRatio = '1:1' | '3:4' | '4:3' | '9:16' | '16:9';
 type ImageResolution = '1K' | '2K' | '4K';
 
-const GPT_IMAGE_2_SIZE_OPTIONS = [
-  { value: 'auto', label: 'Auto' },
-  { value: '1024x1024', label: '1024x1024 (Square)' },
-  { value: '1536x1024', label: '1536x1024 (Landscape)' },
-  { value: '1024x1536', label: '1024x1536 (Portrait)' },
-  { value: '2048x2048', label: '2048x2048 (2K Square)' },
-  { value: '2048x1152', label: '2048x1152 (2K Landscape)' },
-  { value: '3840x2160', label: '3840x2160 (4K Landscape)' },
-  { value: '2160x3840', label: '2160x3840 (4K Portrait)' },
-  { value: 'custom', label: 'Custom size' },
-] as const;
-
-type GptImage2Size = typeof GPT_IMAGE_2_SIZE_OPTIONS[number]['value'];
-
-const validateGptImage2Dimensions = (width: number, height: number) => {
-  if (!Number.isInteger(width) || !Number.isInteger(height) || width <= 0 || height <= 0) {
-    return 'Width and height must be positive whole numbers.';
-  }
-  if (width > 3840 || height > 3840) {
-    return 'Neither edge can exceed 3840px.';
-  }
-  if (width % 16 !== 0 || height % 16 !== 0) {
-    return 'Both edges must be multiples of 16px.';
-  }
-  if (Math.max(width, height) / Math.min(width, height) > 3) {
-    return 'The long-to-short edge ratio cannot exceed 3:1.';
-  }
-  const pixels = width * height;
-  if (pixels < 655_360 || pixels > 8_294_400) {
-    return 'Total pixels must be between 655,360 and 8,294,400.';
-  }
-  return '';
+const GPT_IMAGE_SIZES: Record<ImageResolution, Record<ImageAspectRatio, string>> = {
+  '1K': {
+    '1:1': '1024x1024',
+    '3:4': '768x1024',
+    '4:3': '1024x768',
+    '9:16': '720x1280',
+    '16:9': '1280x720',
+  },
+  '2K': {
+    '1:1': '2048x2048',
+    '3:4': '1536x2048',
+    '4:3': '2048x1536',
+    '9:16': '1152x2048',
+    '16:9': '2048x1152',
+  },
+  '4K': {
+    '1:1': '2880x2880',
+    '3:4': '2448x3264',
+    '4:3': '3264x2448',
+    '9:16': '2160x3840',
+    '16:9': '3840x2160',
+  },
 };
 
 const isGptImageModel = (model: string) => /^gpt-image(?:-|$)/i.test(model.trim());
 const isGptModel = (model: string) => /^gpt(?:-|$)/i.test(model.trim());
 
-const appendImageSizeRequirement = (prompt: string, size: string) => {
-  const requirement = size === 'auto'
-    ? 'Output size requirement: Automatically choose the most suitable image dimensions based on the prompt.'
-    : `Output size requirement: The final image must be exactly ${size} pixels.`;
+const appendImageSizeRequirement = (
+  prompt: string,
+  resolution: ImageResolution,
+  ratio: ImageAspectRatio,
+  size: string
+) => {
+  const requirement = `Output size requirement: Generate the final image at ${resolution} resolution with a ${ratio} aspect ratio, exactly ${size} pixels.`;
   return `${prompt}\n\n${requirement}`;
 };
 
 const getOpenAiImageSize = (
   model: string,
   resolution: ImageResolution,
-  ratio: ImageAspectRatio,
-  gptImage2Size: GptImage2Size,
-  customWidth: number,
-  customHeight: number
+  ratio: ImageAspectRatio
 ) => {
-  if (/^gpt-image-2(?:-|$)/i.test(model.trim())) {
-    if (gptImage2Size === 'custom') {
-      const validationError = validateGptImage2Dimensions(customWidth, customHeight);
-      if (validationError) throw new Error(`Invalid gpt-image-2 size: ${validationError}`);
-      return `${customWidth}x${customHeight}`;
-    }
-    return gptImage2Size;
+  if (isGptModel(model)) {
+    return GPT_IMAGE_SIZES[resolution][ratio];
   }
 
   if (ratio === '3:4' || ratio === '9:16') return '1024x1536';
@@ -527,9 +512,6 @@ const App: React.FC = () => {
   const [selectedModel, setSelectedModel] = useState<'gemini-2.5-flash-image' | 'gemini-3-pro-image-preview' | 'gemini-2.0-flash'>('gemini-2.5-flash-image');
   const [aspectRatio, setAspectRatio] = useState<ImageAspectRatio>('1:1');
   const [imageResolution, setImageResolution] = useState<ImageResolution>('1K');
-  const [gptImage2Size, setGptImage2Size] = useState<GptImage2Size>('auto');
-  const [gptImage2CustomWidth, setGptImage2CustomWidth] = useState(1024);
-  const [gptImage2CustomHeight, setGptImage2CustomHeight] = useState(1024);
   const [imageCount, setImageCount] = useState<number>(2);
   const [hasProKey, setHasProKey] = useState(false);
 
@@ -1209,16 +1191,13 @@ const App: React.FC = () => {
             const openaiSize = getOpenAiImageSize(
                 requestModel,
                 imageResolution,
-                aspectRatio,
-                gptImage2Size,
-                gptImage2CustomWidth,
-                gptImage2CustomHeight
+                aspectRatio
             );
             const generationPrompt = isGptModel(requestModel)
-                ? appendImageSizeRequirement(baseGenerationPrompt, openaiSize)
+                ? appendImageSizeRequirement(baseGenerationPrompt, imageResolution, aspectRatio, openaiSize)
                 : baseGenerationPrompt;
             const editPrompt = isGptModel(requestModel)
-                ? appendImageSizeRequirement(baseEditPrompt, openaiSize)
+                ? appendImageSizeRequirement(baseEditPrompt, imageResolution, aspectRatio, openaiSize)
                 : baseEditPrompt;
 
             if (hasImageInputs || annotationAttachment) {
@@ -1518,7 +1497,7 @@ const App: React.FC = () => {
       } finally {
         generationControllersRef.current.delete(taskId);
       }
-  }, [elements, selectedModel, aspectRatio, imageResolution, gptImage2Size, gptImage2CustomWidth, gptImage2CustomHeight, imageCount, apiProvider, serverAiConfig, serverAiConfigError, customGeminiKey, openaiBaseUrl, openaiModel, openaiKey, openaiStream, setElements]);
+  }, [elements, selectedModel, aspectRatio, imageResolution, imageCount, apiProvider, serverAiConfig, serverAiConfigError, customGeminiKey, openaiBaseUrl, openaiModel, openaiKey, openaiStream, setElements]);
 
   const handleCreateGroup = useCallback((bounds: Bounds, inputElementIds: string[]) => {
       const groupId = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
@@ -1904,16 +1883,6 @@ const App: React.FC = () => {
 
   const contextMenuElement = contextMenu?.elementId ? elements.find(el => el.id === contextMenu.elementId) : null;
 
-  const activeOpenAiModel = apiProvider === 'openai-custom'
-    ? openaiModel
-    : apiProvider === 'server' && serverAiConfig.provider === 'openai-compatible'
-      ? serverAiConfig.model
-      : '';
-  const usesGptImage2 = /^gpt-image-2(?:-|$)/i.test(activeOpenAiModel.trim());
-  const gptImage2CustomSizeError = gptImage2Size === 'custom'
-    ? validateGptImage2Dimensions(gptImage2CustomWidth, gptImage2CustomHeight)
-    : '';
-
   return (
     <main className="relative w-screen h-[100dvh] overflow-hidden bg-gray-100 font-sans" onClick={() => setContextMenu(null)}>
       <button
@@ -2048,88 +2017,38 @@ const App: React.FC = () => {
                 </>
             )}
 
-            {usesGptImage2 ? (
-                <div className="mt-2">
-                    <label htmlFor="gpt-image-2-size" className="mb-1 block text-xs font-semibold text-gray-600">
-                        Size
-                    </label>
-                    <select
-                        id="gpt-image-2-size"
-                        value={gptImage2Size}
-                        onChange={(e) => setGptImage2Size(e.target.value as GptImage2Size)}
-                        className="w-full rounded-md border border-gray-300 bg-white px-2 py-1.5 text-xs text-gray-700 focus:outline-none focus:ring-1 focus:ring-purple-500"
-                    >
-                        {GPT_IMAGE_2_SIZE_OPTIONS.map(option => (
-                            <option key={option.value} value={option.value}>{option.label}</option>
-                        ))}
-                    </select>
-                    {gptImage2Size === 'custom' && (
-                        <div className="mt-2">
-                            <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-1">
-                                <input
-                                    type="number"
-                                    aria-label="Custom image width"
-                                    min={16}
-                                    max={3840}
-                                    step={16}
-                                    value={gptImage2CustomWidth}
-                                    onChange={(e) => setGptImage2CustomWidth(Number(e.target.value))}
-                                    className="min-w-0 rounded-md border border-gray-300 bg-white px-2 py-1.5 text-xs text-gray-700 focus:outline-none focus:ring-1 focus:ring-purple-500"
-                                />
-                                <span className="text-xs text-gray-400">x</span>
-                                <input
-                                    type="number"
-                                    aria-label="Custom image height"
-                                    min={16}
-                                    max={3840}
-                                    step={16}
-                                    value={gptImage2CustomHeight}
-                                    onChange={(e) => setGptImage2CustomHeight(Number(e.target.value))}
-                                    className="min-w-0 rounded-md border border-gray-300 bg-white px-2 py-1.5 text-xs text-gray-700 focus:outline-none focus:ring-1 focus:ring-purple-500"
-                                />
-                            </div>
-                            {gptImage2CustomSizeError && (
-                                <p className="mt-1 text-[10px] leading-tight text-red-600">{gptImage2CustomSizeError}</p>
-                            )}
-                        </div>
-                    )}
+            <div className="mt-2">
+                <div className="flex justify-between items-center mb-1">
+                    <span className="text-xs font-semibold text-gray-600">Resolution</span>
                 </div>
-            ) : (
-                <div className="mt-2">
-                    <div className="flex justify-between items-center mb-1">
-                        <span className="text-xs font-semibold text-gray-600">Resolution</span>
-                    </div>
-                    <div className="grid grid-cols-3 gap-1">
-                        {(['1K', '2K', '4K'] as const).map(res => (
-                            <button
-                                key={res}
-                                onClick={() => setImageResolution(res)}
-                                className={`px-1 py-1 text-[10px] rounded-md border transition-all ${imageResolution === res ? 'bg-purple-600 text-white border-purple-600' : 'bg-white text-gray-600 border-gray-300 hover:border-purple-400'}`}
-                            >
-                                {res}
-                            </button>
-                        ))}
-                    </div>
+                <div className="grid grid-cols-3 gap-1">
+                    {(['1K', '2K', '4K'] as const).map(res => (
+                        <button
+                            key={res}
+                            onClick={() => setImageResolution(res)}
+                            className={`px-1 py-1 text-[10px] rounded-md border transition-all ${imageResolution === res ? 'bg-purple-600 text-white border-purple-600' : 'bg-white text-gray-600 border-gray-300 hover:border-purple-400'}`}
+                        >
+                            {res}
+                        </button>
+                    ))}
                 </div>
-            )}
+            </div>
         </div>
 
         {/* Aspect Ratio Selection */}
         <div className="flex flex-col gap-2 p-3 bg-gray-50 rounded-lg border border-gray-100">
-            <h2 className="text-sm font-bold text-gray-700 mb-1">{usesGptImage2 ? 'Generation' : 'Aspect Ratio'}</h2>
-            {!usesGptImage2 && (
-                <div className="grid grid-cols-3 gap-1">
-                    {['1:1', '3:4', '4:3', '9:16', '16:9'].map(ratio => (
-                        <button
-                            key={ratio}
-                            onClick={() => setAspectRatio(ratio as ImageAspectRatio)}
-                            className={`px-2 py-1.5 text-xs rounded-md border transition-all ${aspectRatio === ratio ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-300 hover:border-blue-400'}`}
-                        >
-                            {ratio}
-                        </button>
-                    ))}
-                </div>
-            )}
+            <h2 className="text-sm font-bold text-gray-700 mb-1">Aspect Ratio</h2>
+            <div className="grid grid-cols-3 gap-1">
+                {['1:1', '3:4', '4:3', '9:16', '16:9'].map(ratio => (
+                    <button
+                        key={ratio}
+                        onClick={() => setAspectRatio(ratio as ImageAspectRatio)}
+                        className={`px-2 py-1.5 text-xs rounded-md border transition-all ${aspectRatio === ratio ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-300 hover:border-blue-400'}`}
+                    >
+                        {ratio}
+                    </button>
+                ))}
+            </div>
 
             {/* Image Count Selection */}
             <div className="mt-2">
