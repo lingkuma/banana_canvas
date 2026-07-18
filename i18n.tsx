@@ -5,7 +5,7 @@ export type Language = 'zh' | 'en';
 const messages = {
   zh: {
     tools: '工具', openTools: '打开工具面板', closeTools: '关闭工具面板',
-    creativeSpace: '创意空间', apiConfiguration: 'API 配置', aiModel: 'AI 模型',
+    creativeSpace: '创意空间', apiConfiguration: 'API 配置', tutorial: '使用教程', aiModel: 'AI 模型',
     serverAiModel: '服务器 AI 模型', notConfigured: '未配置', serverReady: '服务器就绪',
     needsEnv: '需要配置 .env', modelsAvailable: '可用模型：{count} 个', proKeyConnected: 'Pro 密钥已连接',
     switch: '切换', connectProKey: '连接 Pro 密钥', billingInfo: '计费说明', resolution: '分辨率',
@@ -51,7 +51,7 @@ const messages = {
   },
   en: {
     tools: 'Tools', openTools: 'Open tools panel', closeTools: 'Close tools panel',
-    creativeSpace: 'Creative Space', apiConfiguration: 'API Configuration', aiModel: 'AI Model',
+    creativeSpace: 'Creative Space', apiConfiguration: 'API Configuration', tutorial: 'Tutorial', aiModel: 'AI Model',
     serverAiModel: 'Server AI model', notConfigured: 'Not configured', serverReady: 'Server ready',
     needsEnv: 'Needs .env', modelsAvailable: '{count} model(s) available', proKeyConnected: 'Pro Key Connected',
     switch: 'Switch', connectProKey: 'Connect Pro Key', billingInfo: 'Billing Info', resolution: 'Resolution',
