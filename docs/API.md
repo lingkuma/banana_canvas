@@ -134,7 +134,13 @@ OpenAI-compatible 分支先根据模型名选择 API：
 - `POST /api/ai/openai/images/generations`
 - `POST /api/ai/openai/images/edits`
 
-服务端再转发到 `<AI_BASE_URL>/chat/completions` 或 `<AI_BASE_URL>/images/...`，并添加 `.env` 中的 Bearer key。图片接口只接受 `generations` 和 `edits` 两种 operation。
+当 `AI_PROVIDER=doubao` 时，服务端使用内置豆包 Seedream 渠道：
+
+- `POST /api/ai/doubao/images/generations`
+- 地址和密钥来自 `BUILTIN_DOUBAO_BASE_URL`、`BUILTIN_DOUBAO_API_KEY`；未设置时分别回退到 `AI_BASE_URL`、`AI_API_KEY`。
+- `doubao-seedream-5-0-260128` / `doubao-seedream-5-0-pro-260628`（Pro）最大支持 2K，`doubao-seedream-5-0-lite-260128` 支持 4K。
+
+OpenAI-compatible 服务端再转发到 `<AI_BASE_URL>/chat/completions` 或 `<AI_BASE_URL>/images/...`，并添加 `.env` 中的 Bearer key；其图片接口只接受 `generations` 和 `edits` 两种 operation。豆包使用上面的专用 `generations` 路由。
 
 ### 3.2 `/images/*` 请求体
 

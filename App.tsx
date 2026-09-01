@@ -56,7 +56,7 @@ type ApiProvider = 'server' | 'gemini-custom' | 'openai-custom';
 
 interface ServerAiConfig {
   configured: boolean;
-  provider: 'gemini' | 'openai-compatible';
+  provider: 'gemini' | 'openai-compatible' | 'doubao';
   model: string;
   models: string[];
   stream: boolean;
@@ -92,6 +92,8 @@ const GPT_IMAGE_SIZES: Record<ImageResolution, Record<ImageAspectRatio, string>>
 const isGptImageModel = (model: string) => /^gpt-image(?:-|$)/i.test(model.trim());
 const isGptModel = (model: string) => /^gpt(?:-|$)/i.test(model.trim());
 const isGeminiImageModel = (model: string) => /(?:^|\/)gemini-.*(?:image|imagen)(?:[-.:]|$)/i.test(model.trim());
+const isDoubaoImageModel = (model: string) => /^doubao-seedream-/i.test(model.trim());
+const isDoubaoLiteModel = (model: string) => /(?:^|-)lite(?:-|$)/i.test(model.trim());
 
 const parseImageResultText = (value: string, allowRawBase64 = false) => {
   const text = value.trim();
@@ -171,6 +173,8 @@ const getOpenAiImageSize = (
   if (ratio === '4:3' || ratio === '16:9') return '1536x1024';
   return '1024x1024';
 };
+
+const getDoubaoImageSize = (resolution: ImageResolution) => resolution;
 
 const getRandomPosition = () => ({
   x: Math.floor(Math.random() * 400) - 200,
@@ -666,6 +670,18 @@ const App: React.FC = () => {
     localStorage.setItem('openaiModelsList', JSON.stringify(openaiModelsList));
     if (serverSelectedModel) localStorage.setItem('serverAiModel', serverSelectedModel);
   }, [apiProvider, customGeminiKey, openaiBaseUrl, openaiModel, openaiKey, openaiStream, openaiModelsList, serverSelectedModel]);
+
+  useEffect(() => {
+    if (
+      apiProvider === 'server'
+      && serverAiConfig.provider === 'doubao'
+      && isDoubaoImageModel(serverSelectedModel)
+      && !isDoubaoLiteModel(serverSelectedModel)
+      && imageResolution === '4K'
+    ) {
+      setImageResolution('2K');
+    }
+  }, [apiProvider, serverAiConfig.provider, serverSelectedModel, imageResolution]);
 
   const handleCloseApiConfig = () => {
     if (apiProvider === 'openai-custom' && openaiModel && !openaiModelsList.includes(openaiModel)) {
@@ -1384,10 +1400,11 @@ const App: React.FC = () => {
         const promptImageSize = GPT_IMAGE_SIZES[imageResolution][aspectRatio];
 
         const useServerOpenAi = apiProvider === 'server' && serverAiConfig.provider === 'openai-compatible';
-        if (apiProvider === 'openai-custom' || useServerOpenAi) {
+        const useServerDoubao = apiProvider === 'server' && serverAiConfig.provider === 'doubao';
+        if (apiProvider === 'openai-custom' || useServerOpenAi || useServerDoubao) {
             const messages: any[] = [];
-            const requestModel = useServerOpenAi ? serverSelectedModel : openaiModel;
-            const requestStream = !isGeminiImageModel(requestModel)
+            const requestModel = (useServerOpenAi || useServerDoubao) ? serverSelectedModel : openaiModel;
+            const requestStream = !isGeminiImageModel(requestModel) && !useServerDoubao
                 && (useServerOpenAi ? serverAiConfig.stream : openaiStream);
             const useImageApi = isGptImageModel(requestModel);
             const sourceImageUrls = imageElements.filter(el => el.src).map(el => el.src);
@@ -1441,14 +1458,25 @@ const App: React.FC = () => {
 
             const generateSingleImageOpenAI = async () => {
                 const operation = hasImageInputs ? 'edits' : 'generations';
-                const endpoint = useImageApi
+                const endpoint = useServerDoubao
+                    ? '/api/ai/doubao/images/generations'
+                    : useImageApi
                     ? (useServerOpenAi
                         ? '/api/ai/openai/images/' + operation
                         : openaiBaseUrl.replace(/\/$/, '') + '/images/' + operation)
                     : (useServerOpenAi
                         ? '/api/ai/openai/chat/completions'
                         : openaiBaseUrl.replace(/\/$/, '') + '/chat/completions');
-                const requestBody = useImageApi
+                const requestBody = useServerDoubao
+                    ? {
+                        model: requestModel,
+                        prompt: hasImageInputs ? editPrompt : generationPrompt,
+                        ...(inputImageUrls[0] ? { image: inputImageUrls[0] } : {}),
+                        size: getDoubaoImageSize(imageResolution),
+                        output_format: 'png',
+                        watermark: false,
+                    }
+                    : useImageApi
                     ? {
                         model: requestModel,
                         prompt: hasImageInputs ? editPrompt : generationPrompt,
@@ -1475,7 +1503,7 @@ const App: React.FC = () => {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
-                        ...(!useServerOpenAi ? { 'Authorization': 'Bearer ' + openaiKey } : {}),
+                        ...(!useServerOpenAi && !useServerDoubao ? { 'Authorization': 'Bearer ' + openaiKey } : {}),
                         ...(requestStream ? { 'Accept': 'text/event-stream' } : {})
                     },
                     signal,
@@ -2302,7 +2330,9 @@ const App: React.FC = () => {
                         </span>
                     </div>
                     <span className="text-[10px] text-gray-500">
-                        {serverAiConfig.provider === 'openai-compatible' ? 'OpenAI-compatible' : 'Gemini'} · {t('modelsAvailable', { count: serverAiConfig.models.length })}
+                        {serverAiConfig.provider === 'openai-compatible'
+                          ? 'OpenAI-compatible'
+                          : serverAiConfig.provider === 'doubao' ? 'Doubao Seedream' : 'Gemini'} · {t('modelsAvailable', { count: serverAiConfig.models.length })}
                     </span>
                     {serverAiConfigError && (
                         <span className="text-[10px] text-red-600">{serverAiConfigError}</span>
@@ -2373,15 +2403,24 @@ const App: React.FC = () => {
                     <span className="text-xs font-semibold text-gray-600">{t('resolution')}</span>
                 </div>
                 <div className="grid grid-cols-3 gap-1">
-                    {(['1K', '2K', '4K'] as const).map(res => (
-                        <button
-                            key={res}
-                            onClick={() => setImageResolution(res)}
-                            className={`px-1 py-1 text-[10px] rounded-md border transition-all ${imageResolution === res ? 'bg-purple-600 text-white border-purple-600' : 'bg-white text-gray-600 border-gray-300 hover:border-purple-400'}`}
-                        >
-                            {res}
-                        </button>
-                    ))}
+                    {(['1K', '2K', '4K'] as const).map(res => {
+                        const doubaoPro4kDisabled = res === '4K'
+                          && apiProvider === 'server'
+                          && serverAiConfig.provider === 'doubao'
+                          && isDoubaoImageModel(serverSelectedModel)
+                          && !isDoubaoLiteModel(serverSelectedModel);
+                        return (
+                          <button
+                              key={res}
+                              onClick={() => setImageResolution(res)}
+                              disabled={doubaoPro4kDisabled}
+                              title={doubaoPro4kDisabled ? 'Doubao Pro supports up to 2K' : undefined}
+                              className={`px-1 py-1 text-[10px] rounded-md border transition-all ${imageResolution === res ? 'bg-purple-600 text-white border-purple-600' : 'bg-white text-gray-600 border-gray-300 hover:border-purple-400'} disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-400 disabled:border-gray-200`}
+                          >
+                              {res}
+                          </button>
+                        );
+                    })}
                 </div>
             </div>
         </div>

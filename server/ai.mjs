@@ -10,6 +10,9 @@ const normalizeProvider = (value) => {
   if (provider === 'gemini' || provider === 'google') {
     return 'gemini';
   }
+  if (provider === 'doubao' || provider === 'seedream' || provider === 'volcengine') {
+    return 'doubao';
+  }
   throw new Error('Unsupported AI_PROVIDER: ' + value);
 };
 
@@ -39,12 +42,21 @@ const isGeminiImageModel = (model) => /(?:^|\/)gemini-.*(?:image|imagen)(?:[-.:]
 
 export const readAiConfig = (env = process.env) => {
   const provider = normalizeProvider(env.AI_PROVIDER);
-  const apiKey = String(env.AI_API_KEY || '').trim();
-  const baseUrl = normalizeBaseUrl(env.AI_BASE_URL);
-  const model = String(
-    env.AI_MODEL || (provider === 'gemini' ? 'gemini-2.5-flash-image' : 'gpt-image-2')
+  const apiKey = String(
+    provider === 'doubao' ? (env.BUILTIN_DOUBAO_API_KEY || env.AI_API_KEY || '') : (env.AI_API_KEY || '')
   ).trim();
-  const models = [...new Set([model, ...parseModelList(env.AI_MODELS)])];
+  const baseUrl = normalizeBaseUrl(
+    provider === 'doubao' ? (env.BUILTIN_DOUBAO_BASE_URL || env.AI_BASE_URL || '') : env.AI_BASE_URL
+  );
+  const model = String(
+    provider === 'doubao'
+      ? (env.BUILTIN_DOUBAO_MODEL || env.AI_MODEL || 'doubao-seedream-5-0-260128')
+      : (env.AI_MODEL || (provider === 'gemini' ? 'gemini-2.5-flash-image' : 'gpt-image-2'))
+  ).trim();
+  const configuredModels = provider === 'doubao'
+    ? (env.BUILTIN_DOUBAO_MODELS || env.DOUBAO_MODELS || env.AI_MODELS)
+    : env.AI_MODELS;
+  const models = [...new Set([model, ...parseModelList(configuredModels)])];
 
   return {
     provider,
@@ -198,6 +210,47 @@ export const createAiRouter = (env = process.env) => {
     } catch (error) {
       res.status(502).json({
         error: error instanceof Error ? error.message : 'The AI provider request failed.',
+      });
+    }
+  });
+
+  router.post('/api/ai/doubao/images/generations', async (req, res) => {
+    if (config.error) return res.status(500).json({ error: config.error });
+    if (config.provider !== 'doubao') {
+      return res.status(409).json({ error: 'The server AI_PROVIDER is not doubao.' });
+    }
+    if (!requireApiKey(config, res)) return;
+    if (!config.baseUrl) {
+      return res.status(503).json({
+        error: 'BUILTIN_DOUBAO_BASE_URL (or AI_BASE_URL) is required for a Doubao channel.',
+      });
+    }
+    const requestModel = resolveRequestModel(config, req.body?.model, res);
+    if (!requestModel) return;
+
+    try {
+      const upstream = await fetch(config.baseUrl + '/images/generations', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ' + config.apiKey,
+        },
+        body: JSON.stringify({
+          ...req.body,
+          model: requestModel,
+        }),
+      });
+
+      res.status(upstream.status);
+      const contentType = upstream.headers.get('content-type');
+      if (contentType) res.setHeader('Content-Type', contentType);
+      const cacheControl = upstream.headers.get('cache-control');
+      if (cacheControl) res.setHeader('Cache-Control', cacheControl);
+      if (!upstream.body) return res.end();
+      Readable.fromWeb(upstream.body).pipe(res);
+    } catch (error) {
+      res.status(502).json({
+        error: error instanceof Error ? error.message : 'The Doubao request failed.',
       });
     }
   });
